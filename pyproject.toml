@@ -22,3 +22,6 @@ gept = ["schema.sql"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Import gept from the checkout even if the editable install's .pth is
+# skipped (Python 3.13 ignores .pth files macOS has flagged hidden).
+pythonpath = ["."]
