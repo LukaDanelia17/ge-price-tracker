@@ -39,19 +39,36 @@ def collect(store: str, dump: Path | None = None) -> tuple[dict[str, Item], list
 
         for category, refs in CATEGORIES[store].items():
             for ref in refs:
-                seen = 0
+                seen: set[str] = set()
+                reported = None
                 try:
                     for n, page in enumerate(pages_for(ref), start=1):
                         if dump:
                             dump.mkdir(parents=True, exist_ok=True)
                             (dump / f"{ref}_page{n}.json").write_text(json.dumps(page, ensure_ascii=False))
-                        for item in parse_products(store, category, page.get("products") or []):
+                        reported = page.get("productsCount")
+                        parsed = parse_products(store, category, page.get("products") or [])
+                        page_ids = {i.store_product_id for i in parsed}
+                        if n > 1 and page_ids and page_ids <= seen:
+                            raise RuntimeError(f"page {n} only repeats earlier products; pagination is broken")
+                        for item in parsed:
                             items.setdefault(item.store_product_id, item)
-                            seen += 1
-                    log.info("%s %s %s: %d items", store, category, ref, seen)
+                        seen |= page_ids
                 except Exception:
-                    log.exception("%s %s %s failed after %d items", store, category, ref, seen)
+                    log.exception("%s %s %s failed after %d items", store, category, ref, len(seen))
                     failures.append(f"{store}/{category}/{ref}")
+                    continue
+                log.info("%s %s %s: %d items", store, category, ref, len(seen))
+                if not seen:
+                    # A configured category that lists nothing means a moved
+                    # category or a broken parser, never a normal run.
+                    log.error("%s %s %s: 0 items", store, category, ref)
+                    failures.append(f"{store}/{category}/{ref}")
+                elif reported is not None and len(seen) != reported:
+                    log.warning(
+                        "%s %s %s: %d unique items but productsCount=%d (catalogue changed mid-run?)",
+                        store, category, ref, len(seen), reported,
+                    )
     return items, failures
 
 
@@ -80,9 +97,14 @@ def main(argv: list[str] | None = None) -> int:
     for store in args.store or DEFAULT_STORES:
         items, failures = collect(store, args.dump)
         all_failures += failures
-        in_stock = sum(i.in_stock for i in items.values())
-        with_old = sum(i.old_price is not None for i in items.values())
-        log.info("%s: %d unique items, %d in stock, %d with old_price", store, len(items), in_stock, with_old)
+        values = items.values()
+        log.info(
+            "%s: %d unique items, in_stock true/false/unknown %d/%d/%d, %d buyable, %d with old_price",
+            store, len(items),
+            sum(i.in_stock is True for i in values), sum(i.in_stock is False for i in values),
+            sum(i.in_stock is None for i in values),
+            sum(i.buyable for i in values), sum(i.old_price is not None for i in values),
+        )
         if conn is not None:
             added = db.save(conn, store, list(items.values()), observed_at)
             log.info("%s: %d price_changes rows added", store, added)

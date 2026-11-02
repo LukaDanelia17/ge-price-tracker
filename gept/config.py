@@ -16,6 +16,7 @@ MAX_PAGES = 100
 # zoommer / alta: numeric CategoryId for the Products API.
 # ee: leaf category slug (only "-c{id}t" pages list products).
 # A product listed under several categories is kept once, under the first one.
+# Every entry must list at least one product, or the run fails.
 CATEGORIES: dict[str, dict[str, list]] = {
     "zoommer": {
         "smartphones": [855],
@@ -36,11 +37,14 @@ CATEGORIES: dict[str, dict[str, list]] = {
         "smartphones": ["mobiluri-telefoni-c377t"],
         "laptops": ["noutbuqebi-c58t"],
         "tvs": ["televizori-c73t"],
+        # The "ყურსასმენები" section (yursasmenebi-c15s/t) lists no products
+        # itself; per ee's mega-menu its product leaves are these three
+        # (the fourth child, c126t, is headphone accessories).
         "headphones": ["headphones-c134t", "buds-c127t", "earphones-c131t"],
         "large_appliances": [
             "macivari-c300t",
             "sareckhi-manqana-c77t",
-            "sareckhi-manqana-sashrobit-c78t",
+            "sareckhis-manqana-sashrobit-c78t",  # renamed by ee on 2026-11-02
             "sashrobi-c50t",
             "churchlis-sareckhi-manqana-c45t",
             "gazqura-c59t",

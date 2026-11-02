@@ -18,8 +18,8 @@ def ensure_schema(conn: psycopg.Connection) -> None:
 
 
 def changed_items(latest: dict[str, tuple], items: list[Item]) -> list[Item]:
-    """Items whose (price, old_price, in_stock) differs from the latest stored
-    state, keyed by store_product_id. New products always count as changed."""
+    """Items whose Item.state() differs from the latest stored state, keyed by
+    store_product_id. New products always count as changed."""
     return [i for i in items if latest.get(i.store_product_id) != i.state()]
 
 
@@ -51,18 +51,29 @@ def save(conn: psycopg.Connection, store: str, items: list[Item], observed_at: d
 
         cur.execute(
             """
-            select distinct on (p.store_product_id) p.store_product_id, c.price, c.old_price, c.in_stock
+            select distinct on (p.store_product_id)
+                   p.store_product_id, c.price, c.old_price, c.in_stock, c.buyable
             from price_changes c join products p on p.id = c.product_id
             where c.product_id = any(%s)
             order by p.store_product_id, c.observed_at desc, c.id desc
             """,
             (list(ids.values()),),
         )
-        latest = {pid: (price, old_price, in_stock) for pid, price, old_price, in_stock in cur.fetchall()}
+        latest = {row[0]: tuple(row[1:]) for row in cur.fetchall()}
 
         changes = changed_items(latest, items)
         cur.executemany(
-            "insert into price_changes (product_id, observed_at, price, old_price, in_stock) values (%s, %s, %s, %s, %s)",
-            [(ids[i.store_product_id], observed_at, i.price, i.old_price, i.in_stock) for i in changes],
+            """
+            insert into price_changes (product_id, observed_at, price, old_price, in_stock, buyable,
+                                       has_discount, discount_amount, discount_percent)
+            values (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            [
+                (
+                    ids[i.store_product_id], observed_at, i.price, i.old_price, i.in_stock, i.buyable,
+                    i.has_discount, i.discount_amount, i.discount_percent,
+                )
+                for i in changes
+            ],
         )
     return len(changes)

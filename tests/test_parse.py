@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from gept.parse import is_in_stock, listing_from_html, parse_products
+from gept.parse import is_buyable, is_in_stock, listing_from_html, parse_products
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -34,20 +34,26 @@ def test_zoommer_old_price_from_previous_price(zoommer_items):
     assert item.price == Decimal("4069.00")
     assert item.old_price == Decimal("4199.00")
     assert item.url == "https://zoommer.ge/mobile-phones/apple-iphone-18-pro-e-sim-only-256gb-burgundy-p54834"
+    assert item.has_discount is True
+    assert item.discount_amount == Decimal("130.00")
+    assert item.discount_percent == Decimal("3.10")
 
 
-def test_zoommer_coming_soon_is_not_in_stock(zoommer_items):
-    # onSaleSoon=true, isInStock=false (as for every zoommer listing item)
-    assert by_id(zoommer_items)["54602"].in_stock is False
-    assert by_id(zoommer_items)["54834"].in_stock is True
+def test_zoommer_stock_is_unknown(zoommer_items):
+    assert all(i.in_stock is None for i in zoommer_items)
 
 
-def test_zoommer_stock_proxy():
-    base = {"disableBuyButton": False, "onSaleSoon": False, "price": 100, "isInStock": False}
-    assert is_in_stock("zoommer", base)
-    assert not is_in_stock("zoommer", base | {"disableBuyButton": True})
-    assert not is_in_stock("zoommer", base | {"onSaleSoon": True})
-    assert not is_in_stock("zoommer", base | {"price": 0})
+def test_zoommer_buyable(zoommer_items):
+    assert by_id(zoommer_items)["54602"].buyable is False  # onSaleSoon
+    assert by_id(zoommer_items)["54834"].buyable is True
+
+
+def test_buyable_rules():
+    base = {"disableBuyButton": False, "onSaleSoon": False, "price": 100}
+    assert is_buyable(base)
+    assert not is_buyable(base | {"disableBuyButton": True})
+    assert not is_buyable(base | {"onSaleSoon": True})
+    assert not is_buyable(base | {"price": 0})
 
 
 def test_ee_embedded_listing():
@@ -62,18 +68,19 @@ def test_ee_last_page(ee_listing_p21):
 
 
 def test_ee_old_price_even_when_has_discount_false(ee_listing_p21):
-    raw = next(p for p in ee_listing_p21["products"] if p["id"] == 22102)
-    assert raw["hasDiscount"] is False  # the flag the parser must ignore
     item = by_id(parse_products("ee", "smartphones", ee_listing_p21["products"]))["22102"]
     assert item.price == Decimal("4929.99")
     assert item.old_price == Decimal("5309.99")
-    assert item.in_stock is True  # storageQuantity 6, despite disableBuyButton
+    assert item.has_discount is False  # kept raw, not used for old_price
+    assert item.discount_amount == Decimal("0.00")
+    assert item.in_stock is True  # storageQuantity 6
+    assert item.buyable is False  # ...but disableBuyButton
 
 
 def test_storage_quantity_stock():
-    assert is_in_stock("ee", {"storageQuantity": 3})
-    assert not is_in_stock("alta", {"storageQuantity": 0})
-    assert not is_in_stock("alta", {"storageQuantity": None})
+    assert is_in_stock("ee", {"storageQuantity": 3}) is True
+    assert is_in_stock("alta", {"storageQuantity": 0}) is False
+    assert is_in_stock("alta", {"storageQuantity": None}) is False
 
 
 def test_listing_from_html_rejects_section_page():

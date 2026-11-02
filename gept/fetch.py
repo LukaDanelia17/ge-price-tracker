@@ -50,9 +50,11 @@ def http_client() -> httpx.Client:
 def zoommer(client: httpx.Client, throttle: Throttle, category_id: int) -> Iterator[dict]:
     def fetch_page(page: int) -> dict:
         throttle.wait()
+        # The API has no sort by id; NameAsc (the site's own "by name" sort) is
+        # steadier across a run than the default merchandising order.
         r = client.get(
             "https://zoommer.ge/api/proxy/v1/Products/v3",
-            params={"CategoryId": category_id, "Page": page, "Limit": 28},
+            params={"CategoryId": category_id, "Page": page, "Limit": 28, "NameAsc": "true"},
         )
         r.raise_for_status()
         return r.json()
@@ -66,6 +68,14 @@ def ee(client: httpx.Client, throttle: Throttle, slug: str) -> Iterator[dict]:
         throttle.wait()
         r = client.get(f"https://ee.ge/{slug}", params={"page": page})
         r.raise_for_status()
+        if r.history and r.url.params.get("page") != str(page):
+            # ee renames slugs, and the redirect to the new one drops ?page=,
+            # which would serve page 1 again. Request the new URL with the page.
+            if page == 1:
+                log.warning("ee: %s now redirects to %s; update config", slug, r.url.path)
+            throttle.wait()
+            r = client.get(f"https://ee.ge{r.url.path}", params={"page": page})
+            r.raise_for_status()
         return listing_from_html(r.text)
 
     return paginate(fetch_page, 16)

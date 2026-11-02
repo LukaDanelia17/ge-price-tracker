@@ -85,6 +85,11 @@ Response envelope: `products[]`, `productsCount`, `hasNextPage` (alta/ee),
 - `?page=N` works in plain HTML (verified pages 1, 2, 21; no overlap).
   Phones: 327 products, 21 pages × 16. ~450 KB per page.
 - Only leaf categories (`-c{id}t`) list products; section pages (`-c{id}s`) return 0–1.
+- **Slugs change without notice** (`sareckhi-manqana-sashrobit-c78t` →
+  `sareckhis-…` mid-day on 2026-11-02). The old slug 301-redirects to the new
+  one but **drops `?page=N`**, so every page silently becomes page 1. The
+  fetcher re-requests the redirect target with the page number and logs the
+  move; a page that only repeats earlier products fails the category.
 - `hasDiscount` can be `false` while `previousPrice` is set (e.g. 4929.99 vs
   5309.99). Trust `previousPrice` only. Prices can have cents (`.99`).
 - Category slugs (leaf):
@@ -107,6 +112,18 @@ Response envelope: `products[]`, `productsCount`, `hasNextPage` (alta/ee),
 ## Decisions
 
 - 2026-11-02: Zoommer stock → "buyable" proxy (see zoommer.ge section).
+  **Superseded the same day:** Zoommer `in_stock` is NULL (unknown); `buyable`
+  is its own column for every store and part of change detection. Raw
+  discount flags are stored in price_changes.
+- 2026-11-02: ee headphones. `yursasmenebi-c15t` is the Headphones *section*
+  (0 products of its own, confirmed via ee's API: CategoryId 15 → 0). ee's
+  mega-menu lists its product leaves as c127t buds (176), c134t headphones
+  (184), c131t earphones (98) — all configured — plus c126t accessories.
+- 2026-11-02: Zoommer pagination. The API has no sort by id (params:
+  NameAsc, PriceAsc, NotInStock, …). Default, NameAsc and PriceAsc full passes
+  all returned 448/448 unique ids; the earlier 449/450 didn't reproduce
+  (likely a catalogue change mid-run). Using NameAsc=true; a run logs a
+  warning when unique ids ≠ productsCount.
 - 2026-11-02: Large appliances → Alta + ee only. Zoommer doesn't sell them;
   no veli.store.
 - 2026-11-02: Alta dropped for Phase 1 (API blocked for automation, see above).

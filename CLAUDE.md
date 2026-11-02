@@ -20,14 +20,17 @@ Black Friday (27 Nov 2026), publish a "fake discount" report, measure reaction.
 - Max ~1 req/sec per store, honest User-Agent, respect robots.txt.
 - Capture both current price and crossed-out old_price, plus stock status.
 - old_price = `previousPrice` only; `hasDiscount`/`discountAmount` are unreliable.
-- in_stock: `storageQuantity > 0` (alta, ee). Zoommer has no stock field →
-  "buyable" proxy: `not disableBuyButton and not onSaleSoon and price > 0`.
+- in_stock: `storageQuantity > 0` (ee, alta); NULL for Zoommer (no stock field).
+- buyable (all stores): `not disableBuyButton and not onSaleSoon and price > 0`.
+- Keep raw hasDiscount / discountAmount / discountPercent in price_changes.
+- A configured category that returns 0 items fails the run; fix the config,
+  don't delete the entry.
 - ee.ge robots.txt sets Crawl-delay 5 → 5 s between ee requests.
 - See DISCOVERY.md for per-store endpoints and category IDs.
 
 ## Storage
 Postgres (Supabase). Tables: products, price_changes.
-Insert into price_changes ONLY when price, old_price or in_stock changed.
+Insert into price_changes ONLY when price, old_price, in_stock or buyable changed.
 
 ## Scheduling
 Twice daily (08:00 / 20:00 Tbilisi). If GitHub Actions is geo-blocked or hits
