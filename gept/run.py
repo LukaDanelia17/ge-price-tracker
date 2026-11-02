@@ -82,15 +82,15 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-    conn = None
+    url = None
     if not args.dry_run:
         from . import db
 
         url = os.environ.get("DATABASE_URL")
         if not url:
             ap.error("DATABASE_URL is not set (or use --dry-run)")
-        conn = db.connect(url)
-        db.ensure_schema(conn)
+        with db.connect(url) as conn:
+            db.ensure_schema(conn)
 
     observed_at = datetime.now(timezone.utc)
     all_failures: list[str] = []
@@ -105,12 +105,17 @@ def main(argv: list[str] | None = None) -> int:
             sum(i.in_stock is None for i in values),
             sum(i.buyable for i in values), sum(i.old_price is not None for i in values),
         )
-        if conn is not None:
-            added = db.save(conn, store, list(items.values()), observed_at)
-            log.info("%s: %d price_changes rows added", store, added)
+        if url is not None:
+            # Connect per save: a connection left idle through a 10+ minute
+            # crawl doesn't survive network blips or pooler idle timeouts.
+            try:
+                with db.connect(url) as conn:
+                    added = db.save(conn, store, list(items.values()), observed_at)
+                log.info("%s: %d price_changes rows added", store, added)
+            except Exception:
+                log.exception("%s: saving failed", store)
+                all_failures.append(f"{store}/save")
 
-    if conn is not None:
-        conn.close()
     if all_failures:
         log.error("failed categories: %s", ", ".join(all_failures))
         return 1

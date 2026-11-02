@@ -29,6 +29,27 @@ class Throttle:
         self._last = time.monotonic()
 
 
+# Seconds to wait before each retry of a failed request (connection errors,
+# timeouts, 5xx). 4xx is not retried.
+RETRY_WAITS = (10, 30)
+
+
+def get_with_retry(client: httpx.Client, url: str, **kwargs) -> httpx.Response:
+    for wait in (*RETRY_WAITS, None):
+        try:
+            r = client.get(url, **kwargs)
+            if r.status_code < 500 or wait is None:
+                r.raise_for_status()
+                return r
+            log.warning("%s: HTTP %d, retrying in %ds", url, r.status_code, wait)
+        except httpx.TransportError as e:
+            if wait is None:
+                raise
+            log.warning("%s: %s, retrying in %ds", url, e, wait)
+        time.sleep(wait)
+    raise AssertionError("unreachable")
+
+
 def paginate(fetch_page: Callable[[int], dict], page_size: int) -> Iterator[dict]:
     for page in range(1, MAX_PAGES + 1):
         data = fetch_page(page)
@@ -52,11 +73,11 @@ def zoommer(client: httpx.Client, throttle: Throttle, category_id: int) -> Itera
         throttle.wait()
         # The API has no sort by id; NameAsc (the site's own "by name" sort) is
         # steadier across a run than the default merchandising order.
-        r = client.get(
+        r = get_with_retry(
+            client,
             "https://zoommer.ge/api/proxy/v1/Products/v3",
             params={"CategoryId": category_id, "Page": page, "Limit": 28, "NameAsc": "true"},
         )
-        r.raise_for_status()
         return r.json()
 
     return paginate(fetch_page, 28)
@@ -66,16 +87,14 @@ def ee(client: httpx.Client, throttle: Throttle, slug: str) -> Iterator[dict]:
     # The JSON API needs a session token; the server-rendered HTML carries the same data.
     def fetch_page(page: int) -> dict:
         throttle.wait()
-        r = client.get(f"https://ee.ge/{slug}", params={"page": page})
-        r.raise_for_status()
+        r = get_with_retry(client, f"https://ee.ge/{slug}", params={"page": page})
         if r.history and r.url.params.get("page") != str(page):
             # ee renames slugs, and the redirect to the new one drops ?page=,
             # which would serve page 1 again. Request the new URL with the page.
             if page == 1:
                 log.warning("ee: %s now redirects to %s; update config", slug, r.url.path)
             throttle.wait()
-            r = client.get(f"https://ee.ge{r.url.path}", params={"page": page})
-            r.raise_for_status()
+            r = get_with_retry(client, f"https://ee.ge{r.url.path}", params={"page": page})
         return listing_from_html(r.text)
 
     return paginate(fetch_page, 16)

@@ -127,6 +127,45 @@ def test_ee_follows_renamed_slug_keeping_the_page():
     assert pages[1]["products"][0]["id"] == 17
 
 
+def test_transient_errors_are_retried(monkeypatch):
+    import httpx
+
+    from gept import fetch
+
+    monkeypatch.setattr(fetch, "RETRY_WAITS", (0, 0))
+    calls = []
+
+    def handler(request):
+        calls.append(1)
+        if len(calls) == 1:
+            raise httpx.ConnectError("[Errno 49] Can't assign requested address")
+        if len(calls) == 2:
+            return httpx.Response(503)
+        return httpx.Response(200, json={"productsCount": 1, "products": [product(1)]})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    pages = list(fetch.zoommer(client, fetch.Throttle(0), 855))
+    assert len(calls) == 3 and pages[0]["products"][0]["id"] == 1
+
+
+def test_client_errors_are_not_retried(monkeypatch):
+    import httpx
+
+    from gept import fetch
+
+    monkeypatch.setattr(fetch, "RETRY_WAITS", (0, 0))
+    calls = []
+
+    def handler(request):
+        calls.append(1)
+        return httpx.Response(404)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    with pytest.raises(httpx.HTTPStatusError):
+        list(fetch.zoommer(client, fetch.Throttle(0), 855))
+    assert len(calls) == 1
+
+
 def test_count_mismatch_only_warns(fake_ee, caplog):
     fake_ee(short=[{"productsCount": 3, "products": [product(1), product(2)]}])
     items, failures = run.collect("ee")
