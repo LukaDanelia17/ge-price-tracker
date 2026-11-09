@@ -1,8 +1,11 @@
 name: crawl
 
+# Both stores answer GitHub-hosted runners with 403 (Cloudflare blocks
+# datacenter IPs), so the scheduled crawl runs from launchd on the Mac
+# (scripts/install_schedule.sh). Kept for manual runs / a self-hosted runner.
 on:
   workflow_dispatch:
-  # Enable after a successful manual run. 04:00 / 16:00 UTC = 08:00 / 20:00 Tbilisi.
+  # 04:00 / 16:00 UTC = 08:00 / 20:00 Tbilisi.
   # schedule:
   #   - cron: "0 4 * * *"
   #   - cron: "0 16 * * *"

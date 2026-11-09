@@ -35,6 +35,10 @@ Insert into price_changes ONLY when price, old_price, in_stock or buyable change
 ## Scheduling
 Twice daily (08:00 / 20:00 Tbilisi). If GitHub Actions is geo-blocked or hits
 Cloudflare, fall back to a local runner.
+Status (2026-11-09): GitHub-hosted runners get 403 from both stores, so the
+crawl runs from launchd on the Mac (`scripts/install_schedule.sh`, logs in
+`logs/`). The repo lives in `~/ge-price-tracker`: launchd jobs can't read
+`~/Documents` (macOS privacy protection).
 
 ## Quality checks (each run)
 - Item count per store/category vs previous run (alert on 0 or >50% drop)

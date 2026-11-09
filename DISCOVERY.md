@@ -111,6 +111,11 @@ Response envelope: `products[]`, `productsCount`, `hasNextPage` (alta/ee),
 
 ## Decisions
 
+- 2026-11-09: GitHub Actions. The workflow reaches Supabase, but every
+  request to zoommer.ge and ee.ge from a GitHub-hosted runner returns 403
+  (Cloudflare, datacenter IPs). Not working around it: the crawl runs from
+  launchd on the Mac instead (see CLAUDE.md → Scheduling).
+
 - 2026-11-02: Zoommer stock → "buyable" proxy (see zoommer.ge section).
   **Superseded the same day:** Zoommer `in_stock` is NULL (unknown); `buyable`
   is its own column for every store and part of change detection. Raw
