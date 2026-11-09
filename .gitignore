@@ -6,3 +6,5 @@ __pycache__/
 *.csv
 # raw pages from `gept.run --dump`; copy the ones you need into tests/fixtures
 dumps/
+# crawl logs from scripts/crawl.sh
+logs/
