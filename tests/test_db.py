@@ -148,6 +148,42 @@ def test_transient_errors_are_retried(monkeypatch):
     assert len(calls) == 3 and pages[0]["products"][0]["id"] == 1
 
 
+def test_trickling_response_hits_the_deadline(monkeypatch):
+    import time
+
+    import httpx
+
+    from gept import fetch
+
+    monkeypatch.setattr(fetch, "REQUEST_DEADLINE", 0.05)
+
+    class Trickle(httpx.SyncByteStream):
+        def __iter__(self):
+            for _ in range(10):
+                time.sleep(0.02)
+                yield b" "
+
+    client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200, stream=Trickle())))
+    with pytest.raises(httpx.ReadTimeout):
+        fetch.get_bounded(client, "https://ee.ge/x")
+
+
+def test_bounded_get_keeps_json_and_redirect_history():
+    import httpx
+
+    from gept import fetch
+
+    def handler(request):
+        if request.url.path == "/old":
+            return httpx.Response(301, headers={"Location": "https://ee.ge/new"})
+        return httpx.Response(200, json={"ok": "ფასი"})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=True)
+    r = fetch.get_bounded(client, "https://ee.ge/old")
+    assert r.json() == {"ok": "ფასი"}
+    assert r.url.path == "/new" and len(r.history) == 1
+
+
 def test_client_errors_are_not_retried(monkeypatch):
     import httpx
 

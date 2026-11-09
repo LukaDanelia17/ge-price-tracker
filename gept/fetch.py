@@ -33,11 +33,30 @@ class Throttle:
 # timeouts, 5xx). 4xx is not retried.
 RETRY_WAITS = (10, 30)
 
+# A whole response must arrive within this many seconds. httpx's timeouts are
+# per read, so a server that trickles bytes never trips them; on 2026-11-02
+# ee held single requests open for 15-80 minutes.
+REQUEST_DEADLINE = 90
+
+
+def get_bounded(client: httpx.Client, url: str, **kwargs) -> httpx.Response:
+    """GET that raises httpx.ReadTimeout once REQUEST_DEADLINE has passed."""
+    started = time.monotonic()
+    with client.stream("GET", url, **kwargs) as r:
+        body = bytearray()
+        for chunk in r.iter_bytes():
+            body += chunk
+            if time.monotonic() - started > REQUEST_DEADLINE:
+                raise httpx.ReadTimeout(f"response took over {REQUEST_DEADLINE}s", request=r.request)
+        # iter_bytes() already undid any content-encoding.
+        headers = [(k, v) for k, v in r.headers.items() if k not in ("content-encoding", "content-length")]
+        return httpx.Response(r.status_code, headers=headers, content=bytes(body), request=r.request, history=r.history)
+
 
 def get_with_retry(client: httpx.Client, url: str, **kwargs) -> httpx.Response:
     for wait in (*RETRY_WAITS, None):
         try:
-            r = client.get(url, **kwargs)
+            r = get_bounded(client, url, **kwargs)
             if r.status_code < 500 or wait is None:
                 r.raise_for_status()
                 return r
