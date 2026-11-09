@@ -8,3 +8,5 @@ __pycache__/
 dumps/
 # crawl logs from scripts/crawl.sh
 logs/
+# CSVs from export.py
+exports/
