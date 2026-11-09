@@ -21,6 +21,9 @@ log="logs/crawl-$(date +%Y%m%d-%H%M).log"
 status=$?
 echo "$(date '+%F %T') exit=$status log=$log" >> logs/crawl.log
 
+# Refresh dashboard/index.html with whatever was saved.
+.venv/bin/python dashboard.py >> "$log" 2>&1 || echo "dashboard build failed" >> "$log"
+
 # Keep the last 60 run logs (a month at two runs a day).
 ls -1t logs/crawl-*.log 2>/dev/null | tail -n +61 | xargs rm -f
 exit $status
