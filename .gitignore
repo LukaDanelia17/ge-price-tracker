@@ -10,3 +10,5 @@ dumps/
 logs/
 # CSVs from export.py
 exports/
+# page built by dashboard.py
+dashboard/

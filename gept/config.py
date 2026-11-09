@@ -1,5 +1,10 @@
 """Stores, categories and politeness settings. IDs come from DISCOVERY.md."""
 
+from pathlib import Path
+
+# Item counts per category from the last real run, for the drop check.
+COUNTS_FILE = Path(__file__).resolve().parent.parent / "logs" / "category_counts.json"
+
 USER_AGENT = "ge-price-tracker/0.1 (price-history research)"
 
 # Seconds between requests to the same store. ee.ge's robots.txt asks for 5.

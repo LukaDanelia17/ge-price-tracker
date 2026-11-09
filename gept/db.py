@@ -2,10 +2,17 @@
 
 from datetime import datetime
 from importlib.resources import files
+from typing import NamedTuple
 
 import psycopg
 
 from .parse import Item
+from .quality import price_issues
+
+
+class Saved(NamedTuple):
+    added: int  # rows added to price_changes
+    price_issues: list[str]
 
 
 def connect(url: str) -> psycopg.Connection:
@@ -23,10 +30,10 @@ def changed_items(latest: dict[str, tuple], items: list[Item]) -> list[Item]:
     return [i for i in items if latest.get(i.store_product_id) != i.state()]
 
 
-def save(conn: psycopg.Connection, store: str, items: list[Item], observed_at: datetime) -> int:
-    """Save one store's snapshot in a single transaction. Returns rows added to price_changes."""
+def save(conn: psycopg.Connection, store: str, items: list[Item], observed_at: datetime) -> Saved:
+    """Save one store's snapshot in a single transaction."""
     if not items:
-        return 0
+        return Saved(0, [])
     with conn.transaction(), conn.cursor() as cur:
         cur.execute(
             """
@@ -76,4 +83,4 @@ def save(conn: psycopg.Connection, store: str, items: list[Item], observed_at: d
                 for i in changes
             ],
         )
-    return len(changes)
+    return Saved(len(changes), price_issues(latest, changes))

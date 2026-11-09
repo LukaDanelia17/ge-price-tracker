@@ -14,16 +14,20 @@ from contextlib import ExitStack
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import fetch
-from .config import CATEGORIES, DEFAULT_STORES
+from . import fetch, telegram
+from .config import CATEGORIES, COUNTS_FILE, DEFAULT_STORES
 from .parse import Item, parse_products
+from .quality import count_issues
 
 log = logging.getLogger("gept")
 
 
-def collect(store: str, dump: Path | None = None) -> tuple[dict[str, Item], list[str]]:
+def collect(
+    store: str, dump: Path | None = None, counts: dict[str, int] | None = None
+) -> tuple[dict[str, Item], list[str]]:
     """Fetch every configured category of one store. Returns items keyed by
-    store_product_id and a list of failed categories."""
+    store_product_id and a list of failed categories; fills `counts` with
+    items per finished category ("store/category/ref")."""
     items: dict[str, Item] = {}
     failures: list[str] = []
     throttle = fetch.new_throttle(store)
@@ -64,12 +68,37 @@ def collect(store: str, dump: Path | None = None) -> tuple[dict[str, Item], list
                     # category or a broken parser, never a normal run.
                     log.error("%s %s %s: 0 items", store, category, ref)
                     failures.append(f"{store}/{category}/{ref}")
-                elif reported is not None and len(seen) != reported:
+                    continue
+                if reported is not None and len(seen) != reported:
                     log.warning(
                         "%s %s %s: %d unique items but productsCount=%d (catalogue changed mid-run?)",
                         store, category, ref, len(seen), reported,
                     )
+                if counts is not None:
+                    counts[f"{store}/{category}/{ref}"] = len(seen)
     return items, failures
+
+
+def load_counts() -> dict[str, int]:
+    try:
+        return json.loads(COUNTS_FILE.read_text())
+    except (FileNotFoundError, ValueError):
+        return {}
+
+
+def save_counts(counts: dict[str, int]) -> None:
+    COUNTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    COUNTS_FILE.write_text(json.dumps(counts, indent=1, sort_keys=True))
+
+
+def report(issues: list[str], totals: dict[str, tuple[int, int]]) -> None:
+    """One Telegram message per run: the issues, or a short summary that also
+    shows the scheduled runs are still happening (TELEGRAM_SUMMARY=0 to skip)."""
+    summary = ", ".join(f"{s} {n} products / {added} changes" for s, (n, added) in totals.items())
+    if issues:
+        telegram.send(f"⚠️ ge-price-tracker: {len(issues)} issue(s)\n" + "\n".join(issues) + f"\n\n{summary}")
+    elif os.environ.get("TELEGRAM_SUMMARY", "1") != "0":
+        telegram.send(f"✅ ge-price-tracker: {summary}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -94,8 +123,11 @@ def main(argv: list[str] | None = None) -> int:
 
     observed_at = datetime.now(timezone.utc)
     all_failures: list[str] = []
+    counts: dict[str, int] = {}
+    price_flags: list[str] = []
+    totals: dict[str, tuple[int, int]] = {}
     for store in args.store or DEFAULT_STORES:
-        items, failures = collect(store, args.dump)
+        items, failures = collect(store, args.dump, counts)
         all_failures += failures
         values = items.values()
         log.info(
@@ -110,11 +142,21 @@ def main(argv: list[str] | None = None) -> int:
             # crawl doesn't survive network blips or pooler idle timeouts.
             try:
                 with db.connect(url) as conn:
-                    added = db.save(conn, store, list(items.values()), observed_at)
-                log.info("%s: %d price_changes rows added", store, added)
+                    saved = db.save(conn, store, list(items.values()), observed_at)
+                log.info("%s: %d price_changes rows added", store, saved.added)
+                price_flags += saved.price_issues
+                totals[store] = (len(items), saved.added)
             except Exception:
                 log.exception("%s: saving failed", store)
                 all_failures.append(f"{store}/save")
+
+    if url is not None:
+        previous = load_counts()
+        issues = [f"failed: {f}" for f in all_failures] + count_issues(previous, counts) + price_flags
+        for line in issues:
+            log.warning("quality: %s", line)
+        save_counts(previous | counts)
+        report(issues, totals)
 
     if all_failures:
         log.error("failed categories: %s", ", ".join(all_failures))
@@ -123,4 +165,11 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except Exception as e:
+        message = f"{type(e).__name__}: {e}"
+        if os.environ.get("DATABASE_URL"):
+            message = message.replace(os.environ["DATABASE_URL"], "<DATABASE_URL>")
+        telegram.send(f"❌ ge-price-tracker crashed: {message[:500]}")
+        raise
