@@ -207,3 +207,26 @@ def test_count_mismatch_only_warns(fake_ee, caplog):
     items, failures = run.collect("ee")
     assert len(items) == 2 and failures == []
     assert "productsCount=3" in caplog.text
+
+
+def test_kontakt_follows_next_until_the_last_page():
+    import httpx
+
+    from gept.fetch import Throttle, kontakt
+
+    def card(i):
+        return (f'<div class="prodItem product-item"><a class="prodItem__img" href="https://kontakt.ge/p{i}"></a>'
+                f'<a data-product-id="{i}"></a><div class="prodItem__title">p{i}</div>'
+                f'<div class="prodItem__prices"><strong><b>{i},00 ₾</b></strong></div></div>')
+
+    seen = []
+
+    def handler(request):
+        page = int(request.url.params.get("p", "1"))
+        seen.append(page)
+        nxt = f'<li class="pages-item-next"><a href="https://kontakt.ge/tvs?p={page + 1}"></a></li>' if page < 3 else ""
+        return httpx.Response(200, text=card(page) + nxt)
+
+    pages = list(kontakt(httpx.Client(transport=httpx.MockTransport(handler)), Throttle(0), "tvs"))
+    assert seen == [1, 2, 3]
+    assert [p["products"][0]["id"] for p in pages] == ["1", "2", "3"]

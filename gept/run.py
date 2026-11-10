@@ -16,7 +16,7 @@ from pathlib import Path
 
 from . import fetch, telegram
 from .config import CATEGORIES, COUNTS_FILE, DEFAULT_STORES, LAST_SUCCESS_FILE
-from .parse import Item, parse_gamige, parse_products
+from .parse import Item, parse_gamige, parse_kontakt, parse_products
 from .quality import count_issues
 
 log = logging.getLogger("gept")
@@ -35,8 +35,8 @@ def collect(
     items: dict[str, Item] = {}
     failures: list[str] = []
     throttle = fetch.new_throttle(store)
-    fetcher = {"zoommer": fetch.zoommer, "ee": fetch.ee, "alta_gamige": fetch.gamige_alta}[store]
-    parse = parse_gamige if store == "alta_gamige" else parse_products
+    fetcher = {"zoommer": fetch.zoommer, "ee": fetch.ee, "alta_gamige": fetch.gamige_alta, "kontakt": fetch.kontakt}[store]
+    parse = {"alta_gamige": parse_gamige, "kontakt": parse_kontakt}.get(store, parse_products)
 
     with ExitStack() as stack:
         client = stack.enter_context(fetch.http_client())

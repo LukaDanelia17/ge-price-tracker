@@ -108,7 +108,7 @@ JSON API. We read alta.ge's prices from here instead of hitting alta directly.
   product endpoint only has a one-word `priceTrend`. Nothing before our own
   collection start can come from gamige.
 
-## kontakt.ge (discovered 2026-11-11, not built yet)
+## kontakt.ge (discovered and built 2026-11-11)
 
 - Magento 2 behind Cloudflare. Category HTML pages return 200 to our honest UA.
 - `/graphql` returns Cloudflare "Attention Required" (403) → blocked for

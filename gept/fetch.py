@@ -9,7 +9,7 @@ from collections.abc import Callable, Iterator
 import httpx
 
 from .config import DELAY, MAX_PAGES, USER_AGENT
-from .parse import listing_from_html
+from .parse import kontakt_listing, listing_from_html
 
 log = logging.getLogger(__name__)
 
@@ -169,6 +169,24 @@ def gamige_alta(
         return {"products": results, "productsCount": data.get("total") or 0}
 
     return paginate(fetch_page, GAMIGE_PAGE_SIZE)
+
+
+def kontakt(client: httpx.Client, throttle: Throttle, path: str) -> Iterator[dict]:
+    """kontakt.ge category pages, page by page via ?p=N until there's no "next".
+
+    Server-rendered HTML; kontakt's GraphQL API is Cloudflare-blocked for
+    automation, so we don't use it. Default sort only: robots.txt disallows the
+    sort parameters. The page count isn't shown, so productsCount is None.
+    """
+    url = f"https://kontakt.ge/{path}"
+    for page in range(1, MAX_PAGES + 1):
+        throttle.wait()
+        r = get_with_retry(client, url, params={"p": page} if page > 1 else None)
+        listing = kontakt_listing(r.text)
+        yield {"products": listing["products"], "productsCount": None}
+        if not listing["next_url"] or not listing["products"]:
+            return
+    log.warning("stopped at MAX_PAGES=%d", MAX_PAGES)
 
 
 def new_throttle(store: str) -> Throttle:

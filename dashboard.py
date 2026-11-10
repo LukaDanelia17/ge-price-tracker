@@ -424,7 +424,8 @@ a.ext { text-decoration: none; margin-left: 6px; }
   <p class="note">დააჭირე მაღაზიას, რომ მხოლოდ მისი პროდუქტები ნახო.</p>
   <div class="stores" id="stores"></div>
 
-  <p class="note foot">zoommer.ge-სა და ee.ge-ს ფასებს პირდაპირ მაღაზიების საიტებიდან ვიღებთ. alta.ge-ს ფასები
+  <p class="note foot">zoommer.ge-ს, ee.ge-სა და kontakt.ge-ს ფასებს პირდაპირ მაღაზიების საიტებიდან ვიღებთ
+    (kontakt.ge-ს სიაში მხოლოდ მარაგში არსებული ნივთები ჩანს). alta.ge-ს ფასები
     მოდის gamige.com-იდან (ფასების შედარების საიტი), რადგან ალტა ავტომატურ წვდომას ზღუდავს. ბმული ამ გვერდზე
     არჩეულ ფილტრებს ინახავს — შეგიძლია გააზიარო.</p>
 </main>
@@ -434,7 +435,7 @@ a.ext { text-decoration: none; margin-left: 6px; }
 <script>
 const D = JSON.parse(document.getElementById("data").textContent);
 const products = new Map(D.products.map(p => [String(p[0]), p]));
-const STORE = {ee: "ee.ge", zoommer: "zoommer.ge", alta_gamige: "alta.ge"};
+const STORE = {ee: "ee.ge", zoommer: "zoommer.ge", alta_gamige: "alta.ge", kontakt: "kontakt.ge"};
 const STORE_SRC = {alta_gamige: "ფასები gamige.com-იდან"};
 const CAT = {smartphones: "ტელეფონები", laptops: "ლეპტოპები", tvs: "ტელევიზორები",
              headphones: "ყურსასმენები", large_appliances: "მსხვილი ტექნიკა"};

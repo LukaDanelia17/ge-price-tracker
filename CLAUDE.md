@@ -6,12 +6,13 @@ retailers. NOT building a product yet. Phase 1 = collect data before
 Black Friday (27 Nov 2026), publish a "fake discount" report, measure reaction.
 
 ## Scope (do not expand without asking)
-- Stores: zoommer.ge, ee.ge fetched directly. alta.ge is NOT fetched directly:
+- Stores: zoommer.ge, ee.ge, kontakt.ge (added 2026-11-11) fetched directly.
+  alta.ge is NOT fetched directly:
   Cloudflare blocks automated access and we don't work around it. Its prices
   come second-hand from gamige.com's open comparison API (store id
   `alta_gamige`, 2026-11-09), never presented as a direct alta observation.
 - Categories: smartphones, laptops, TVs, headphones, large appliances
-  (large appliances = ee + alta_gamige; Zoommer doesn't sell them)
+  (large appliances = ee + alta_gamige + kontakt; Zoommer doesn't sell them)
 - Out of scope: cross-store product matching, browser extension, user accounts, UI
 
 ## Data collection rules
@@ -24,6 +25,9 @@ Black Friday (27 Nov 2026), publish a "fake discount" report, measure reaction.
 - old_price = `previousPrice` only; `hasDiscount`/`discountAmount` are unreliable.
 - in_stock: `storageQuantity > 0` (ee); NULL for Zoommer (no stock field) and
   for alta_gamige (gamige's list endpoint doesn't report stock).
+- kontakt: server-rendered category HTML (its GraphQL API is Cloudflare-blocked
+  for automation; don't use it). The listing is filtered to in-stock items, so
+  in_stock = true while that filter tag shows (else NULL); buyable = price > 0.
 - alta_gamige: read price + old_price per product from gamige's /api/search
   (store=Alta). The list has no stock or link, so in_stock stays NULL and
   buyable just mirrors price > 0. The real alta.ge link is resolved once per
