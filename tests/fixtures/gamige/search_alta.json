@@ -1,0 +1,38 @@
+{
+  "results": [
+    {
+      "id": "6657907",
+      "name": "Apple iPhone 17 Pro Max 256GB",
+      "category": "ტელეფონები",
+      "prices": {"Zoomer": 3749, "Alta": 3849, "EE": 4049.99},
+      "oldPrices": {"Zoomer": 3999, "Alta": 4049},
+      "slug": "apple-iphone-17-pro-max-256gb-6657907",
+      "altaUrl": "https://alta.ge/telefonebi/apple-iphone-17-pro-max-256gb-p12345"
+    },
+    {
+      "id": "6280223",
+      "name": "PlayStation PULSE Explore Wireless earbuds - White/Black",
+      "category": "ყურსასმენები",
+      "prices": {"Alta": 489, "EE": 699.99},
+      "slug": "playstation-pulse-explore-wireless-earbuds-white-black-6280223"
+    },
+    {
+      "id": "9999999",
+      "name": "Something only EE sells",
+      "category": "ტელეფონები",
+      "prices": {"EE": 199.99},
+      "slug": "something-only-ee-sells-9999999"
+    },
+    {
+      "id": "6661320",
+      "name": "  HONOR CHOICE Headphones Lite  ",
+      "category": "ყურსასმენები",
+      "prices": {"Alta": 49, "Megatechnica": 159},
+      "oldPrices": {"Alta": 69},
+      "slug": "honor-choice-headphones-lite-6661320"
+    }
+  ],
+  "total": 4,
+  "page": 1,
+  "limit": 20
+}

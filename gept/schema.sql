@@ -28,3 +28,12 @@ create table if not exists price_changes (
 
 create index if not exists price_changes_product_observed
     on price_changes (product_id, observed_at desc);
+
+-- One row per store per saved run. price_changes only records changes, so this
+-- is what tells "nothing changed" apart from "we didn't look" (gaps).
+create table if not exists runs (
+    store       text        not null,
+    observed_at timestamptz not null,
+    items       integer     not null,
+    primary key (store, observed_at)
+);

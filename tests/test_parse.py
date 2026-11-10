@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from gept.parse import is_buyable, is_in_stock, listing_from_html, parse_products
+from gept.parse import _alta_value, is_buyable, is_in_stock, listing_from_html, parse_gamige, parse_products
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -87,3 +87,46 @@ def test_listing_from_html_rejects_section_page():
     html = '<script id="__NEXT_DATA__">{"props": {"pageProps": {"schemaBreadcrumbs": []}}}</script>'
     with pytest.raises(ValueError):
         listing_from_html(html)
+
+
+@pytest.fixture(scope="module")
+def gamige_items():
+    data = json.loads((FIXTURES / "gamige/search_alta.json").read_text())
+    return parse_gamige("alta_gamige", "smartphones", data["results"])
+
+
+def test_gamige_skips_products_alta_does_not_carry(gamige_items):
+    # The EE-only item (no "Alta" in its prices) is dropped.
+    assert set(by_id(gamige_items)) == {"6657907", "6280223", "6661320"}
+
+
+def test_gamige_takes_alta_price_and_old_price(gamige_items):
+    item = by_id(gamige_items)["6657907"]
+    assert item.store == "alta_gamige"
+    assert item.price == Decimal("3849.00")
+    assert item.old_price == Decimal("4049.00")  # alta's, not zoomer's or ee's
+    assert item.url == "https://alta.ge/telefonebi/apple-iphone-17-pro-max-256gb-p12345"  # resolved alta link
+    assert item.category == "smartphones"  # the category we queried, not gamige's label
+
+
+def test_gamige_stock_unknown_discount_flags_empty(gamige_items):
+    item = by_id(gamige_items)["6657907"]
+    assert item.in_stock is None  # gamige's listing doesn't report stock
+    assert item.buyable is True  # price > 0
+    assert (item.has_discount, item.discount_amount, item.discount_percent) == (None, None, None)
+
+
+def test_gamige_no_old_price_and_name_stripped(gamige_items):
+    assert by_id(gamige_items)["6280223"].old_price is None  # no oldPrices block
+    assert by_id(gamige_items)["6661320"].name == "HONOR CHOICE Headphones Lite"
+
+
+def test_gamige_url_falls_back_to_gamige_page_without_alta_link(gamige_items):
+    # No altaUrl resolved (detail lookup missing/failed) → link to gamige's page.
+    assert by_id(gamige_items)["6280223"].url == "https://gamige.com/?p=6280223"
+
+
+def test_alta_value_case_insensitive():
+    assert _alta_value({"ALTA": 5, "EE": 9}) == 5
+    assert _alta_value({"EE": 9}) is None
+    assert _alta_value(None) is None

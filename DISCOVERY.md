@@ -10,7 +10,7 @@ transport differs.
 | Store | Best source | Transport | Page size | old_price | Stock |
 |---|---|---|---|---|---|
 | zoommer.ge | JSON API `GET /api/proxy/v1/Products/v3?CategoryId={id}&Page={n}&Limit=28` | **httpx**, no cookies/auth | 28 | `previousPrice` | ⚠ no reliable field (see below) |
-| alta.ge | JSON API `GET /api/proxy/v1/Products/v4?CategoryId={id}&Limit=16&Page={n}` (page 1 also in `__NEXT_DATA__`) | **Playwright** — Cloudflare challenge on every non-browser request | 16 (Limit>16 → 403) | `previousPrice` | `storageQuantity` |
+| alta.ge (via gamige.com) | `GET https://gamige.com/api/search?storeType=electronics&store=Alta&category={ka}&page={n}` — alta direct is Cloudflare-blocked, don't work around it | **httpx**, no cookies/auth | 20 | `oldPrices.Alta` | ⚠ not in list endpoint → NULL |
 | ee.ge | Embedded JSON: `__NEXT_DATA__.props.pageProps.initialListingData` on `/{slug}-c{id}t?page={n}` | **httpx**, plain HTML | 16 | `previousPrice` | `storageQuantity` |
 
 ## Shared product schema (fields we need)
@@ -66,8 +66,8 @@ Response envelope: `products[]`, `productsCount`, `hasNextPage` (alta/ee),
   Chromium loads the site and receives `cf_clearance`, but `Products/v4` still
   returns 403 (it returns 200 in a normal desktop browser). Cloudflare is
   blocking automated browsers on the API on purpose. Getting around that means
-  hiding automation (stealth plugins etc.) — not doing that. Alta is out of
-  the default run until there's a sanctioned route (see Decisions).
+  hiding automation (stealth plugins etc.) — not doing that. Alta is not
+  fetched directly; its prices come from gamige.com instead (see below).
 - Phones (cat 16): 299 products → 19 pages. `storageQuantity` is a real count.
 - Category IDs:
   - smartphones **16**
@@ -75,6 +75,69 @@ Response envelope: `products[]`, `productsCount`, `hasNextPage` (alta/ee),
   - TVs **88**
   - headphones: parent **299**, children 22 / 300 / 308 / 212
   - large appliances: parent **6**, refrigerator **135**; still need the washer/dishwasher/oven IDs
+  (these alta category IDs are unused now — kept only as a record.)
+
+## gamige.com (alta source, 2026-11-09)
+
+Open third-party price-comparison aggregator ("გამიგე"), React SPA on a public
+JSON API. We read alta.ge's prices from here instead of hitting alta directly.
+
+- Open: plain curl + honest UA → HTTP 200, `robots.txt: Allow: /`, no Cloudflare
+  challenge. No auth, no cookie needed for reads.
+- `GET /api/search?storeType=electronics&store=Alta&category={ka}&page={n}`
+  → `{results:[...], total, page, limit}`, 20 results/page.
+- Each result: `{id, name, category, prices:{StoreLabel:number},
+  oldPrices:{StoreLabel:number}, slug, ...}`. alta's label is `Alta`. The list
+  has **no** per-store stock or URL — those are only in
+  `GET /api/product/{id}` (`stores:[{store,price,inStock,url}]`).
+- The alta.ge link is resolved from `/api/product/{id}` once per product (the
+  run reuses links already in the DB, so only newly-seen products cost a detail
+  call). in_stock stays NULL — we deliberately don't take detail's stock, since
+  we only hit detail once and stock would go stale.
+- gamige category names (its `category=` filter) → our categories:
+  ტელეფონები→smartphones, ლეპტოპები→laptops, ტელევიზორები→tvs,
+  ყურსასმენები→headphones, მსხვილი ტექნიკა→large_appliances.
+- Alta product counts (2026-11-09): phones 115, laptops 144, TVs 168,
+  headphones 112, large appliances 502.
+- Stored as store `alta_gamige`, url = the resolved alta.ge product link
+  (gamige.com/?p={id} as a fallback), store_product_id = gamige's id.
+  Second-hand data: attribute gamige in reports.
+
+- No price history (checked 2026-11-11): `/api/analysis/product/{barcode}` and
+  `/api/analysis/by-name/{name}` are food/nutrition analysis, not prices; the
+  product endpoint only has a one-word `priceTrend`. Nothing before our own
+  collection start can come from gamige.
+
+## kontakt.ge (discovered 2026-11-11, not built yet)
+
+- Magento 2 behind Cloudflare. Category HTML pages return 200 to our honest UA.
+- `/graphql` returns Cloudflare "Attention Required" (403) → blocked for
+  automation on purpose; don't use it, don't work around it.
+- robots.txt: category pages allowed; `?p=N` pagination allowed; sort params
+  (`?dir`, `?product_list_*`, `?mode`, `?limit=all`), `/catalog/`, search are
+  disallowed → use default order. No Crawl-delay → 1 req/s.
+- Source: server-rendered cards, 20 per page, next page via `pages-item-next`
+  (page links only show a window of 5, so follow "next" until it's gone).
+  Per card: `data-product-id`, `.prodItem__title`, link on `.prodItem__img`,
+  `.prodItem__prices strong`: `<b>` = current price, `<i>` = crossed-out price
+  (only when discounted). Prices like `1539,99 ₾` (comma decimal).
+- Stock: listing has an active "მარაგში: დიახ" (in stock) filter by default,
+  so only in-stock items are listed; out-of-stock ones just drop out. No
+  buy-button or raw discount fields.
+- Category leaves (all verified 200, in-stock filter on):
+  - smartphones `mobilurebi-da-aksesuarebi/mobiluri-telefonebi`
+  - laptops `kompiuteruli-teknika/leptopebi`
+  - tvs `televizorebi/televizorebi`
+  - headphones `mobilurebi-da-aksesuarebi/qursasmenebi/{tws-yursasmenebi,
+    usadeno-qursasmenebi, kabeliani-qursasmenebi, gaming-qursasmenebi}`
+    (skipping `yursasmenis-qeisebi`, cases)
+  - large appliances `saqophatskhovrebo-teknika/mskhvili-saqophatskhovrebo-teknika/
+    {matsivrebi, saretskhi-mankanebi, sashrobi-mankanebi,
+    churchlis-sareckhi-manqana, gazqura}` + `saqophatskhovrebo-teknika/
+    chasashenebeli-teknika/{chasashenebeli-ghumeli, gazquris-zedapiri}`
+- Other candidates seen in gamige's data, reachable with our UA, not inspected:
+  megatechnica.ge (Laravel, Cloudflare, appliances chain), alneo.ge
+  (WordPress/WooCommerce — check its Store API first).
 
 ## ee.ge (Elite)
 
@@ -132,5 +195,9 @@ Response envelope: `products[]`, `productsCount`, `hasNextPage` (alta/ee),
 - 2026-11-02: Large appliances → Alta + ee only. Zoommer doesn't sell them;
   no veli.store.
 - 2026-11-02: Alta dropped for Phase 1 (API blocked for automation, see above).
-  Phase 1 = Zoommer + ee; large appliances = ee only. The Alta fetcher and
-  category IDs stay in the code, opt-in via `--store alta`.
+- 2026-11-09: Alta back in, but **only via gamige.com** (store `alta_gamige`),
+  the open aggregator — we never work around alta's Cloudflare. Second-hand
+  data, so it's marked as its own store and gamige is credited as the source.
+  The direct Playwright Alta fetcher was removed (it was the Cloudflare
+  workaround we'd declined); alta's own category IDs above are now just a record.
+  Large appliances = ee + alta_gamige.

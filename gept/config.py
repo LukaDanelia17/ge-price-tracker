@@ -5,21 +5,30 @@ from pathlib import Path
 # Item counts per category from the last real run, for the drop check.
 COUNTS_FILE = Path(__file__).resolve().parent.parent / "logs" / "category_counts.json"
 
+# When the last run that saved data finished; decides whether a crawl is due.
+LAST_SUCCESS_FILE = COUNTS_FILE.parent / "last_success"
+
+# Scheduled crawl times, Tbilisi hours. A run missed at one of these (Mac off,
+# asleep or offline) is caught up by the next hourly check.
+SLOTS = (8, 20)
+
 USER_AGENT = "ge-price-tracker/0.1 (price-history research)"
 
 # Seconds between requests to the same store. ee.ge's robots.txt asks for 5.
-DELAY = {"zoommer": 1.0, "alta": 1.0, "ee": 5.0}
+DELAY = {"zoommer": 1.0, "ee": 5.0, "alta_gamige": 1.0}
 
-# Stores a plain `python -m gept.run` collects. alta is dropped for Phase 1:
-# Cloudflare returns 403 on its listing API for Playwright (headless and
-# headed). Kept opt-in via --store alta. See DISCOVERY.md.
-DEFAULT_STORES = ["zoommer", "ee"]
+# Stores a plain `python -m gept.run` collects. alta.ge blocks automated access
+# behind Cloudflare, so its prices come second-hand from gamige.com's open
+# comparison API under the store id "alta_gamige" (never a direct observation).
+# See DISCOVERY.md.
+DEFAULT_STORES = ["zoommer", "ee", "alta_gamige"]
 
 # Hard stop so a pagination bug can't hammer a store.
 MAX_PAGES = 100
 
-# zoommer / alta: numeric CategoryId for the Products API.
+# zoommer: numeric CategoryId for the Products API.
 # ee: leaf category slug (only "-c{id}t" pages list products).
+# alta_gamige: gamige.com's own Georgian category name (its ?category= filter).
 # A product listed under several categories is kept once, under the first one.
 # Every entry must list at least one product, or the run fails.
 CATEGORIES: dict[str, dict[str, list]] = {
@@ -30,13 +39,12 @@ CATEGORIES: dict[str, dict[str, list]] = {
         "headphones": [533],
         # Zoommer doesn't sell large appliances.
     },
-    "alta": {
-        "smartphones": [16],
-        "laptops": [34, 110],
-        "tvs": [88],
-        "headphones": [22, 300, 308, 212],
-        # fridge, washer, dryer, dishwasher, gas cooker, hob, built-in oven, built-in hob
-        "large_appliances": [135, 136, 137, 138, 139, 283, 141, 142],
+    "alta_gamige": {
+        "smartphones": ["ტელეფონები"],
+        "laptops": ["ლეპტოპები"],
+        "tvs": ["ტელევიზორები"],
+        "headphones": ["ყურსასმენები"],
+        "large_appliances": ["მსხვილი ტექნიკა"],
     },
     "ee": {
         "smartphones": ["mobiluri-telefoni-c377t"],

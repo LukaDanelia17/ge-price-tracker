@@ -15,30 +15,34 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import fetch, telegram
-from .config import CATEGORIES, COUNTS_FILE, DEFAULT_STORES
-from .parse import Item, parse_products
+from .config import CATEGORIES, COUNTS_FILE, DEFAULT_STORES, LAST_SUCCESS_FILE
+from .parse import Item, parse_gamige, parse_products
 from .quality import count_issues
 
 log = logging.getLogger("gept")
 
 
 def collect(
-    store: str, dump: Path | None = None, counts: dict[str, int] | None = None
+    store: str,
+    dump: Path | None = None,
+    counts: dict[str, int] | None = None,
+    known_urls: dict[str, str] | None = None,
 ) -> tuple[dict[str, Item], list[str]]:
     """Fetch every configured category of one store. Returns items keyed by
     store_product_id and a list of failed categories; fills `counts` with
-    items per finished category ("store/category/ref")."""
+    items per finished category ("store/category/ref"). `known_urls` (alta only)
+    lets the gamige fetcher skip the per-product link lookup we already have."""
     items: dict[str, Item] = {}
     failures: list[str] = []
     throttle = fetch.new_throttle(store)
+    fetcher = {"zoommer": fetch.zoommer, "ee": fetch.ee, "alta_gamige": fetch.gamige_alta}[store]
+    parse = parse_gamige if store == "alta_gamige" else parse_products
 
     with ExitStack() as stack:
-        if store == "alta":
-            browser = stack.enter_context(fetch.AltaBrowser())
-            pages_for = lambda ref: fetch.alta(browser, throttle, ref)  # noqa: E731
+        client = stack.enter_context(fetch.http_client())
+        if store == "alta_gamige":
+            pages_for = lambda ref: fetcher(client, throttle, ref, known_urls or {})  # noqa: E731
         else:
-            client = stack.enter_context(fetch.http_client())
-            fetcher = fetch.zoommer if store == "zoommer" else fetch.ee
             pages_for = lambda ref: fetcher(client, throttle, ref)  # noqa: E731
 
         for category, refs in CATEGORIES[store].items():
@@ -51,7 +55,7 @@ def collect(
                             dump.mkdir(parents=True, exist_ok=True)
                             (dump / f"{ref}_page{n}.json").write_text(json.dumps(page, ensure_ascii=False))
                         reported = page.get("productsCount")
-                        parsed = parse_products(store, category, page.get("products") or [])
+                        parsed = parse(store, category, page.get("products") or [])
                         page_ids = {i.store_product_id for i in parsed}
                         if n > 1 and page_ids and page_ids <= seen:
                             raise RuntimeError(f"page {n} only repeats earlier products; pagination is broken")
@@ -127,7 +131,15 @@ def main(argv: list[str] | None = None) -> int:
     price_flags: list[str] = []
     totals: dict[str, tuple[int, int]] = {}
     for store in args.store or DEFAULT_STORES:
-        items, failures = collect(store, args.dump, counts)
+        known_urls = None
+        if store == "alta_gamige" and url is not None:
+            with db.connect(url) as conn:
+                rows = conn.execute(
+                    "select store_product_id, url from products where store = %s", (store,)
+                ).fetchall()
+            known_urls = {pid: u for pid, u in rows if u.startswith("https://alta.ge/")}
+            log.info("alta_gamige: %d known alta links; resolving links for the rest", len(known_urls))
+        items, failures = collect(store, args.dump, counts, known_urls)
         all_failures += failures
         values = items.values()
         log.info(
@@ -157,6 +169,8 @@ def main(argv: list[str] | None = None) -> int:
             log.warning("quality: %s", line)
         save_counts(previous | counts)
         report(issues, totals)
+        if totals:  # at least one store saved: this run counts for the schedule
+            LAST_SUCCESS_FILE.write_text(datetime.now(timezone.utc).isoformat())
 
     if all_failures:
         log.error("failed categories: %s", ", ".join(all_failures))
