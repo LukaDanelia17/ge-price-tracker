@@ -5,6 +5,7 @@ DISCOVERY.md for which fields are trustworthy.
 """
 
 import json
+import re
 from dataclasses import dataclass
 from decimal import Decimal
 
@@ -12,7 +13,6 @@ from selectolax.lexbor import LexborHTMLParser
 
 BASE_URL = {
     "zoommer": "https://zoommer.ge/",
-    "alta": "https://alta.ge/",
     "ee": "https://ee.ge/",
 }
 
@@ -79,6 +79,119 @@ def parse_products(store: str, category: str, products: list[dict]) -> list[Item
         )
         for p in products
     ]
+
+
+# The store label gamige.com uses for alta.ge inside its price maps.
+GAMIGE_ALTA_LABEL = "alta"
+
+
+def parse_gamige(store: str, category: str, products: list[dict]) -> list[Item]:
+    """alta.ge prices taken second-hand from gamige.com's comparison API.
+
+    gamige's list items carry only price and old_price per store (no stock,
+    no buy-button state), so in_stock is unknown here. The fetcher resolves the
+    real alta.ge link into "altaUrl" (once per product); we fall back to
+    gamige's own comparison page if it's missing. See DISCOVERY.md.
+    """
+    items = []
+    for p in products:
+        price = _alta_value(p.get("prices"))
+        if price is None:
+            continue  # gamige matched this product but alta doesn't carry it
+        price = money(price)
+        items.append(
+            Item(
+                store=store,
+                store_product_id=str(p["id"]),
+                name=p["name"].strip(),
+                url=p.get("altaUrl") or f"https://gamige.com/?p={p['id']}",
+                category=category,
+                price=price,
+                old_price=money(_alta_value(p.get("oldPrices"))),
+                in_stock=None,  # gamige's listing doesn't report stock
+                buyable=bool(price and price > 0),
+                has_discount=None,
+                discount_amount=None,
+                discount_percent=None,
+            )
+        )
+    return items
+
+
+def _alta_value(prices: dict | None):
+    """alta's entry from a gamige {store: price} map, matched case-insensitively."""
+    for store, value in (prices or {}).items():
+        if store.lower() == GAMIGE_ALTA_LABEL:
+            return value
+    return None
+
+
+# kontakt.ge's listing is filtered to in-stock items while this filter tag shows.
+KONTAKT_IN_STOCK_TAG = "მარაგში: დიახ"
+
+
+def kontakt_money(text: str | None) -> Decimal | None:
+    """'1539,99 ₾' -> 1539.99; '------ ₾' (no price shown) -> None."""
+    digits = re.sub(r"[^\d,.]", "", text or "")
+    if not re.search(r"\d", digits):
+        return None
+    if "," in digits:  # comma decimal; any dots are thousands separators
+        digits = digits.replace(".", "").replace(",", ".")
+    return money(digits)
+
+
+def kontakt_listing(html: str) -> dict:
+    """Product cards on a kontakt.ge category page: {products, next_url}.
+
+    Prices stay as the page's text (parse_kontakt converts them) so a page can
+    be dumped as JSON. Raises if a card lacks its id, title or link: that means
+    the layout changed, and the category should fail rather than come back thin.
+    """
+    tree = LexborHTMLParser(html)
+    in_stock = True if any(n.text(strip=True) == KONTAKT_IN_STOCK_TAG for n in tree.css(".customTag span")) else None
+    products = []
+    for card in tree.css(".prodItem.product-item"):
+        pid, title, link = card.css_first("[data-product-id]"), card.css_first(".prodItem__title"), card.css_first("a.prodItem__img")
+        if not (pid and title and link):
+            raise ValueError("kontakt card without id/title/link; page layout changed?")
+        prices = card.css_first(".prodItem__prices strong")
+        current = prices.css_first("b") if prices else None
+        crossed = prices.css_first("i") if prices else None
+        products.append({
+            "id": pid.attributes["data-product-id"],
+            "name": title.text(strip=True),
+            "url": link.attributes["href"],
+            "price": current.text(strip=True) if current else None,
+            "old": crossed.text(strip=True) if crossed else None,
+            "in_stock": in_stock,
+        })
+    nxt = tree.css_first(".pages-item-next a")
+    return {"products": products, "next_url": nxt.attributes.get("href") if nxt else None}
+
+
+def parse_kontakt(store: str, category: str, products: list[dict]) -> list[Item]:
+    """kontakt.ge cards from kontakt_listing. No buy-button or raw discount
+    fields on its listing; buyable just mirrors a shown price > 0."""
+    items = []
+    for p in products:
+        price = kontakt_money(p["price"])
+        items.append(
+            Item(
+                store=store,
+                store_product_id=str(p["id"]),
+                name=p["name"].strip(),
+                url=p["url"],
+                category=category,
+                price=price,
+                old_price=kontakt_money(p["old"]),
+                in_stock=p.get("in_stock"),
+                buyable=bool(price and price > 0),
+                has_discount=None,
+                discount_amount=None,
+                discount_percent=None,
+            )
+        )
+    return items
 
 
 def next_data(html: str) -> dict:

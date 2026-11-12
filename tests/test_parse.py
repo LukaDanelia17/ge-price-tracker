@@ -4,7 +4,17 @@ from pathlib import Path
 
 import pytest
 
-from gept.parse import is_buyable, is_in_stock, listing_from_html, parse_products
+from gept.parse import (
+    _alta_value,
+    is_buyable,
+    is_in_stock,
+    kontakt_listing,
+    kontakt_money,
+    listing_from_html,
+    parse_gamige,
+    parse_kontakt,
+    parse_products,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -87,3 +97,89 @@ def test_listing_from_html_rejects_section_page():
     html = '<script id="__NEXT_DATA__">{"props": {"pageProps": {"schemaBreadcrumbs": []}}}</script>'
     with pytest.raises(ValueError):
         listing_from_html(html)
+
+
+@pytest.fixture(scope="module")
+def gamige_items():
+    data = json.loads((FIXTURES / "gamige/search_alta.json").read_text())
+    return parse_gamige("alta_gamige", "smartphones", data["results"])
+
+
+def test_gamige_skips_products_alta_does_not_carry(gamige_items):
+    # The EE-only item (no "Alta" in its prices) is dropped.
+    assert set(by_id(gamige_items)) == {"6657907", "6280223", "6661320"}
+
+
+def test_gamige_takes_alta_price_and_old_price(gamige_items):
+    item = by_id(gamige_items)["6657907"]
+    assert item.store == "alta_gamige"
+    assert item.price == Decimal("3849.00")
+    assert item.old_price == Decimal("4049.00")  # alta's, not zoomer's or ee's
+    assert item.url == "https://alta.ge/telefonebi/apple-iphone-17-pro-max-256gb-p12345"  # resolved alta link
+    assert item.category == "smartphones"  # the category we queried, not gamige's label
+
+
+def test_gamige_stock_unknown_discount_flags_empty(gamige_items):
+    item = by_id(gamige_items)["6657907"]
+    assert item.in_stock is None  # gamige's listing doesn't report stock
+    assert item.buyable is True  # price > 0
+    assert (item.has_discount, item.discount_amount, item.discount_percent) == (None, None, None)
+
+
+def test_gamige_no_old_price_and_name_stripped(gamige_items):
+    assert by_id(gamige_items)["6280223"].old_price is None  # no oldPrices block
+    assert by_id(gamige_items)["6661320"].name == "HONOR CHOICE Headphones Lite"
+
+
+def test_gamige_url_falls_back_to_gamige_page_without_alta_link(gamige_items):
+    # No altaUrl resolved (detail lookup missing/failed) → link to gamige's page.
+    assert by_id(gamige_items)["6280223"].url == "https://gamige.com/?p=6280223"
+
+
+def test_alta_value_case_insensitive():
+    assert _alta_value({"ALTA": 5, "EE": 9}) == 5
+    assert _alta_value({"EE": 9}) is None
+    assert _alta_value(None) is None
+
+
+@pytest.fixture(scope="module")
+def kontakt_tvs():
+    return kontakt_listing((FIXTURES / "kontakt/televizorebi_page1.html").read_text())
+
+
+def test_kontakt_page_lists_cards_and_the_next_page(kontakt_tvs):
+    assert len(kontakt_tvs["products"]) == 20
+    assert kontakt_tvs["next_url"] == "https://kontakt.ge/televizorebi/televizorebi?p=2"
+
+
+def test_kontakt_last_page_has_no_next():
+    listing = kontakt_listing((FIXTURES / "kontakt/kabeliani-qursasmenebi_page1.html").read_text())
+    assert len(listing["products"]) == 17 and listing["next_url"] is None
+
+
+def test_kontakt_prices_and_stock(kontakt_tvs):
+    items = by_id(parse_kontakt("kontakt", "tvs", kontakt_tvs["products"]))
+    toshiba = items["31328"]
+    assert (toshiba.price, toshiba.old_price) == (Decimal("1149.99"), Decimal("1499.99"))
+    assert toshiba.url.startswith("https://kontakt.ge/") and toshiba.in_stock is True and toshiba.buyable
+    no_price = items["23252"]  # card shows "------ ₾"
+    assert (no_price.price, no_price.old_price, no_price.buyable) == (None, None, False)
+    assert sum(i.old_price is None for i in items.values()) > 0  # some cards aren't discounted
+
+
+def test_kontakt_stock_unknown_without_the_in_stock_filter():
+    card = ('<div class="prodItem product-item"><a class="prodItem__img" href="https://kontakt.ge/x"></a>'
+            '<a data-product-id="7"></a><div class="prodItem__title">X</div>'
+            '<div class="prodItem__prices"><strong><b>10,00 ₾</b></strong></div></div>')
+    assert kontakt_listing(card)["products"][0]["in_stock"] is None
+
+
+def test_kontakt_card_without_id_fails_loudly():
+    with pytest.raises(ValueError):
+        kontakt_listing('<div class="prodItem product-item"><div class="prodItem__title">X</div></div>')
+
+
+def test_kontakt_money():
+    assert kontakt_money("1539,99\xa0₾") == Decimal("1539.99")
+    assert kontakt_money("1.539,99 ₾") == Decimal("1539.99")
+    assert kontakt_money("------ ₾") is None and kontakt_money(None) is None

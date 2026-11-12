@@ -5,12 +5,11 @@
 import logging
 import time
 from collections.abc import Callable, Iterator
-from urllib.parse import urlencode
 
 import httpx
 
 from .config import DELAY, MAX_PAGES, USER_AGENT
-from .parse import listing_from_html
+from .parse import kontakt_listing, listing_from_html
 
 log = logging.getLogger(__name__)
 
@@ -30,8 +29,9 @@ class Throttle:
 
 
 # Seconds to wait before each retry of a failed request (connection errors,
-# timeouts, 5xx). 4xx is not retried.
-RETRY_WAITS = (10, 30)
+# timeouts, 5xx). 4xx is not retried. A Mac waking from sleep can take a couple
+# of minutes to get its network back, hence the longer tail.
+RETRY_WAITS = (10, 30, 60, 120)
 
 # A whole response must arrive within this many seconds. httpx's timeouts are
 # per read, so a server that trickles bytes never trips them; on 2026-11-02
@@ -119,54 +119,75 @@ def ee(client: httpx.Client, throttle: Throttle, slug: str) -> Iterator[dict]:
     return paginate(fetch_page, 16)
 
 
-class AltaBrowser:
-    """alta.ge answers every non-browser request with a Cloudflare challenge, so
-    open the site once in Chromium and call its listing API from inside the page.
+# gamige.com returns 20 results per search page.
+GAMIGE_PAGE_SIZE = 20
+
+
+def _alta_url(client: httpx.Client, throttle: Throttle, product_id: str) -> str | None:
+    """alta.ge's own product link from gamige's per-product detail endpoint.
+
+    The search list has no per-store URL; only /api/product/{id} carries
+    stores[].url. One extra call, so we only make it for products whose link
+    we don't already have (see gamige_alta's known_urls).
     """
-
-    def __init__(self, headless: bool = True):
-        self.headless = headless
-
-    def __enter__(self) -> "AltaBrowser":
-        from playwright.sync_api import sync_playwright
-
-        self._pw = sync_playwright().start()
-        self._browser = self._pw.chromium.launch(headless=self.headless)
-        # Keep Chromium's own UA (honest) and append ours so the store can identify us.
-        probe = self._browser.new_page()
-        ua = f"{probe.evaluate('navigator.userAgent')} {USER_AGENT}"
-        probe.close()
-        self.page = self._browser.new_context(user_agent=ua, locale="ka-GE").new_page()
-        self.page.goto("https://alta.ge/", wait_until="domcontentloaded")
-        self.page.wait_for_function("document.title !== 'Just a moment...'", timeout=60_000)
-        return self
-
-    def __exit__(self, *exc) -> None:
-        self._browser.close()
-        self._pw.stop()
-
-    def get_json(self, path: str, params: dict) -> dict:
-        return self.page.evaluate(
-            """async (url) => {
-                const r = await fetch(url, {headers: {accept: 'application/json'}});
-                if (!r.ok) throw new Error('HTTP ' + r.status + ' for ' + url);
-                return await r.json();
-            }""",
-            f"{path}?{urlencode(params)}",
-        )
+    throttle.wait()
+    try:
+        r = get_with_retry(client, f"https://gamige.com/api/product/{product_id}")
+        for s in r.json().get("stores") or []:
+            if (s.get("store") or "").lower() == "alta":
+                return s.get("url")
+    except httpx.HTTPError:
+        log.warning("gamige: detail fetch failed for %s", product_id)
+    return None
 
 
-def alta(browser: AltaBrowser, throttle: Throttle, category_id: int) -> Iterator[dict]:
+def gamige_alta(
+    client: httpx.Client, throttle: Throttle, category: str, known_urls: dict[str, str] | None = None
+) -> Iterator[dict]:
+    """alta.ge prices via gamige.com's open comparison API (no auth, no challenge).
+
+    alta.ge blocks automated access behind Cloudflare, so we don't fetch it
+    directly; gamige is an open third-party aggregator that publishes alta's
+    prices. `category` is gamige's own Georgian category name. Each result is
+    enriched with "altaUrl" (alta's own link): reused from known_urls when we
+    already have it, otherwise fetched once from the detail endpoint. Yields the
+    same {products, productsCount} envelope the other fetchers do.
+    """
+    known_urls = known_urls or {}
+
     def fetch_page(page: int) -> dict:
         throttle.wait()
-        # Same endpoint and parameter order the site's "see more" button uses;
-        # Limit above 16 is rejected by the WAF.
-        return browser.get_json(
-            "/api/proxy/v1/Products/v4",
-            {"CategoryId": category_id, "Limit": 16, "Page": page},
+        r = get_with_retry(
+            client,
+            "https://gamige.com/api/search",
+            params={"storeType": "electronics", "store": "Alta", "category": category, "page": page},
         )
+        data = r.json()
+        results = data.get("results") or []
+        for item in results:
+            pid = str(item["id"])
+            item["altaUrl"] = known_urls.get(pid) or _alta_url(client, throttle, pid)
+        return {"products": results, "productsCount": data.get("total") or 0}
 
-    return paginate(fetch_page, 16)
+    return paginate(fetch_page, GAMIGE_PAGE_SIZE)
+
+
+def kontakt(client: httpx.Client, throttle: Throttle, path: str) -> Iterator[dict]:
+    """kontakt.ge category pages, page by page via ?p=N until there's no "next".
+
+    Server-rendered HTML; kontakt's GraphQL API is Cloudflare-blocked for
+    automation, so we don't use it. Default sort only: robots.txt disallows the
+    sort parameters. The page count isn't shown, so productsCount is None.
+    """
+    url = f"https://kontakt.ge/{path}"
+    for page in range(1, MAX_PAGES + 1):
+        throttle.wait()
+        r = get_with_retry(client, url, params={"p": page} if page > 1 else None)
+        listing = kontakt_listing(r.text)
+        yield {"products": listing["products"], "productsCount": None}
+        if not listing["next_url"] or not listing["products"]:
+            return
+    log.warning("stopped at MAX_PAGES=%d", MAX_PAGES)
 
 
 def new_throttle(store: str) -> Throttle:

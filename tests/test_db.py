@@ -207,3 +207,42 @@ def test_count_mismatch_only_warns(fake_ee, caplog):
     items, failures = run.collect("ee")
     assert len(items) == 2 and failures == []
     assert "productsCount=3" in caplog.text
+
+
+def test_kontakt_follows_next_until_the_last_page():
+    import httpx
+
+    from gept.fetch import Throttle, kontakt
+
+    def card(i):
+        return (f'<div class="prodItem product-item"><a class="prodItem__img" href="https://kontakt.ge/p{i}"></a>'
+                f'<a data-product-id="{i}"></a><div class="prodItem__title">p{i}</div>'
+                f'<div class="prodItem__prices"><strong><b>{i},00 ₾</b></strong></div></div>')
+
+    seen = []
+
+    def handler(request):
+        page = int(request.url.params.get("p", "1"))
+        seen.append(page)
+        nxt = f'<li class="pages-item-next"><a href="https://kontakt.ge/tvs?p={page + 1}"></a></li>' if page < 3 else ""
+        return httpx.Response(200, text=card(page) + nxt)
+
+    pages = list(kontakt(httpx.Client(transport=httpx.MockTransport(handler)), Throttle(0), "tvs"))
+    assert seen == [1, 2, 3]
+    assert [p["products"][0]["id"] for p in pages] == ["1", "2", "3"]
+
+
+def test_stores_are_crawled_at_the_same_time(monkeypatch):
+    import threading
+
+    # Both fake stores must be inside collect() at once to get past the barrier;
+    # run one after the other, the first would time out waiting for the second.
+    barrier = threading.Barrier(2, timeout=5)
+
+    def fake_collect(store, dump=None, counts=None, known_urls=None):
+        barrier.wait()
+        counts[f"{store}/tvs/x"] = 1
+        return {"1": item()}, []
+
+    monkeypatch.setattr(run, "collect", fake_collect)
+    assert run.main(["--dry-run", "--store", "zoommer", "--store", "ee"]) == 0

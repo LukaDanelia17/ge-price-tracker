@@ -83,4 +83,8 @@ def save(conn: psycopg.Connection, store: str, items: list[Item], observed_at: d
                 for i in changes
             ],
         )
+        cur.execute(
+            "insert into runs (store, observed_at, items) values (%s, %s, %s) on conflict do nothing",
+            (store, observed_at, len(items)),
+        )
     return Saved(len(changes), price_issues(latest, changes))

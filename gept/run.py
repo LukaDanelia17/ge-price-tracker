@@ -10,35 +10,40 @@ import json
 import logging
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from datetime import datetime, timezone
 from pathlib import Path
 
 from . import fetch, telegram
-from .config import CATEGORIES, COUNTS_FILE, DEFAULT_STORES
-from .parse import Item, parse_products
+from .config import CATEGORIES, COUNTS_FILE, DEFAULT_STORES, LAST_SUCCESS_FILE
+from .parse import Item, parse_gamige, parse_kontakt, parse_products
 from .quality import count_issues
 
 log = logging.getLogger("gept")
 
 
 def collect(
-    store: str, dump: Path | None = None, counts: dict[str, int] | None = None
+    store: str,
+    dump: Path | None = None,
+    counts: dict[str, int] | None = None,
+    known_urls: dict[str, str] | None = None,
 ) -> tuple[dict[str, Item], list[str]]:
     """Fetch every configured category of one store. Returns items keyed by
     store_product_id and a list of failed categories; fills `counts` with
-    items per finished category ("store/category/ref")."""
+    items per finished category ("store/category/ref"). `known_urls` (alta only)
+    lets the gamige fetcher skip the per-product link lookup we already have."""
     items: dict[str, Item] = {}
     failures: list[str] = []
     throttle = fetch.new_throttle(store)
+    fetcher = {"zoommer": fetch.zoommer, "ee": fetch.ee, "alta_gamige": fetch.gamige_alta, "kontakt": fetch.kontakt}[store]
+    parse = {"alta_gamige": parse_gamige, "kontakt": parse_kontakt}.get(store, parse_products)
 
     with ExitStack() as stack:
-        if store == "alta":
-            browser = stack.enter_context(fetch.AltaBrowser())
-            pages_for = lambda ref: fetch.alta(browser, throttle, ref)  # noqa: E731
+        client = stack.enter_context(fetch.http_client())
+        if store == "alta_gamige":
+            pages_for = lambda ref: fetcher(client, throttle, ref, known_urls or {})  # noqa: E731
         else:
-            client = stack.enter_context(fetch.http_client())
-            fetcher = fetch.zoommer if store == "zoommer" else fetch.ee
             pages_for = lambda ref: fetcher(client, throttle, ref)  # noqa: E731
 
         for category, refs in CATEGORIES[store].items():
@@ -51,7 +56,7 @@ def collect(
                             dump.mkdir(parents=True, exist_ok=True)
                             (dump / f"{ref}_page{n}.json").write_text(json.dumps(page, ensure_ascii=False))
                         reported = page.get("productsCount")
-                        parsed = parse_products(store, category, page.get("products") or [])
+                        parsed = parse(store, category, page.get("products") or [])
                         page_ids = {i.store_product_id for i in parsed}
                         if n > 1 and page_ids and page_ids <= seen:
                             raise RuntimeError(f"page {n} only repeats earlier products; pagination is broken")
@@ -122,13 +127,18 @@ def main(argv: list[str] | None = None) -> int:
             db.ensure_schema(conn)
 
     observed_at = datetime.now(timezone.utc)
-    all_failures: list[str] = []
-    counts: dict[str, int] = {}
-    price_flags: list[str] = []
-    totals: dict[str, tuple[int, int]] = {}
-    for store in args.store or DEFAULT_STORES:
-        items, failures = collect(store, args.dump, counts)
-        all_failures += failures
+
+    def crawl(store: str) -> tuple:
+        known_urls = None
+        if store == "alta_gamige" and url is not None:
+            with db.connect(url) as conn:
+                rows = conn.execute(
+                    "select store_product_id, url from products where store = %s", (store,)
+                ).fetchall()
+            known_urls = {pid: u for pid, u in rows if u.startswith("https://alta.ge/")}
+            log.info("alta_gamige: %d known alta links; resolving links for the rest", len(known_urls))
+        store_counts: dict[str, int] = {}
+        items, failures = collect(store, args.dump, store_counts, known_urls)
         values = items.values()
         log.info(
             "%s: %d unique items, in_stock true/false/unknown %d/%d/%d, %d buyable, %d with old_price",
@@ -137,6 +147,7 @@ def main(argv: list[str] | None = None) -> int:
             sum(i.in_stock is None for i in values),
             sum(i.buyable for i in values), sum(i.old_price is not None for i in values),
         )
+        saved = None
         if url is not None:
             # Connect per save: a connection left idle through a 10+ minute
             # crawl doesn't survive network blips or pooler idle timeouts.
@@ -144,11 +155,28 @@ def main(argv: list[str] | None = None) -> int:
                 with db.connect(url) as conn:
                     saved = db.save(conn, store, list(items.values()), observed_at)
                 log.info("%s: %d price_changes rows added", store, saved.added)
-                price_flags += saved.price_issues
-                totals[store] = (len(items), saved.added)
             except Exception:
                 log.exception("%s: saving failed", store)
-                all_failures.append(f"{store}/save")
+                failures = failures + [f"{store}/save"]
+        return items, failures, store_counts, saved
+
+    # Stores are separate sites, each with its own throttle, so crawl them at
+    # the same time: the run takes as long as the slowest store (ee, with its
+    # 5 s crawl delay) instead of the sum of all of them.
+    stores = args.store or DEFAULT_STORES
+    with ThreadPoolExecutor(max_workers=len(stores)) as pool:
+        results = list(pool.map(crawl, stores))
+
+    all_failures: list[str] = []
+    counts: dict[str, int] = {}
+    price_flags: list[str] = []
+    totals: dict[str, tuple[int, int]] = {}
+    for store, (items, failures, store_counts, saved) in zip(stores, results):
+        all_failures += failures
+        counts |= store_counts
+        if saved is not None:
+            price_flags += saved.price_issues
+            totals[store] = (len(items), saved.added)
 
     if url is not None:
         previous = load_counts()
@@ -157,6 +185,8 @@ def main(argv: list[str] | None = None) -> int:
             log.warning("quality: %s", line)
         save_counts(previous | counts)
         report(issues, totals)
+        if totals and not all_failures:  # a partial run leaves the slot open for a retry
+            LAST_SUCCESS_FILE.write_text(datetime.now(timezone.utc).isoformat())
 
     if all_failures:
         log.error("failed categories: %s", ", ".join(all_failures))

@@ -11,8 +11,6 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
-# Only for the opt-in alta.ge fetcher (dropped for Phase 1).
-alta = ["playwright>=1.45"]
 
 [tool.setuptools]
 packages = ["gept"]
