@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from datetime import datetime, timezone
 from pathlib import Path
@@ -126,11 +127,8 @@ def main(argv: list[str] | None = None) -> int:
             db.ensure_schema(conn)
 
     observed_at = datetime.now(timezone.utc)
-    all_failures: list[str] = []
-    counts: dict[str, int] = {}
-    price_flags: list[str] = []
-    totals: dict[str, tuple[int, int]] = {}
-    for store in args.store or DEFAULT_STORES:
+
+    def crawl(store: str) -> tuple:
         known_urls = None
         if store == "alta_gamige" and url is not None:
             with db.connect(url) as conn:
@@ -139,8 +137,8 @@ def main(argv: list[str] | None = None) -> int:
                 ).fetchall()
             known_urls = {pid: u for pid, u in rows if u.startswith("https://alta.ge/")}
             log.info("alta_gamige: %d known alta links; resolving links for the rest", len(known_urls))
-        items, failures = collect(store, args.dump, counts, known_urls)
-        all_failures += failures
+        store_counts: dict[str, int] = {}
+        items, failures = collect(store, args.dump, store_counts, known_urls)
         values = items.values()
         log.info(
             "%s: %d unique items, in_stock true/false/unknown %d/%d/%d, %d buyable, %d with old_price",
@@ -149,6 +147,7 @@ def main(argv: list[str] | None = None) -> int:
             sum(i.in_stock is None for i in values),
             sum(i.buyable for i in values), sum(i.old_price is not None for i in values),
         )
+        saved = None
         if url is not None:
             # Connect per save: a connection left idle through a 10+ minute
             # crawl doesn't survive network blips or pooler idle timeouts.
@@ -156,11 +155,28 @@ def main(argv: list[str] | None = None) -> int:
                 with db.connect(url) as conn:
                     saved = db.save(conn, store, list(items.values()), observed_at)
                 log.info("%s: %d price_changes rows added", store, saved.added)
-                price_flags += saved.price_issues
-                totals[store] = (len(items), saved.added)
             except Exception:
                 log.exception("%s: saving failed", store)
-                all_failures.append(f"{store}/save")
+                failures = failures + [f"{store}/save"]
+        return items, failures, store_counts, saved
+
+    # Stores are separate sites, each with its own throttle, so crawl them at
+    # the same time: the run takes as long as the slowest store (ee, with its
+    # 5 s crawl delay) instead of the sum of all of them.
+    stores = args.store or DEFAULT_STORES
+    with ThreadPoolExecutor(max_workers=len(stores)) as pool:
+        results = list(pool.map(crawl, stores))
+
+    all_failures: list[str] = []
+    counts: dict[str, int] = {}
+    price_flags: list[str] = []
+    totals: dict[str, tuple[int, int]] = {}
+    for store, (items, failures, store_counts, saved) in zip(stores, results):
+        all_failures += failures
+        counts |= store_counts
+        if saved is not None:
+            price_flags += saved.price_issues
+            totals[store] = (len(items), saved.added)
 
     if url is not None:
         previous = load_counts()
@@ -169,7 +185,7 @@ def main(argv: list[str] | None = None) -> int:
             log.warning("quality: %s", line)
         save_counts(previous | counts)
         report(issues, totals)
-        if totals:  # at least one store saved: this run counts for the schedule
+        if totals and not all_failures:  # a partial run leaves the slot open for a retry
             LAST_SUCCESS_FILE.write_text(datetime.now(timezone.utc).isoformat())
 
     if all_failures:

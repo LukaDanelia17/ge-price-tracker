@@ -5,8 +5,10 @@ from pathlib import Path
 # Item counts per category from the last real run, for the drop check.
 COUNTS_FILE = Path(__file__).resolve().parent.parent / "logs" / "category_counts.json"
 
-# When the last run that saved data finished; decides whether a crawl is due.
+# When the last run with no failed category finished, and when crawl.sh last
+# started one; together they decide whether a crawl is due.
 LAST_SUCCESS_FILE = COUNTS_FILE.parent / "last_success"
+LAST_ATTEMPT_FILE = COUNTS_FILE.parent / "last_attempt"
 
 # Scheduled crawl times, Tbilisi hours. A run missed at one of these (Mac off,
 # asleep or offline) is caught up by the next hourly check.

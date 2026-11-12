@@ -107,3 +107,15 @@ def test_a_run_with_no_changes_still_closes_a_gap():
 def test_render_embeds_json_safely():
     html = render({"x": "</script><b>"})
     assert "</script><b>" not in html and "<\\/script>" in html
+
+
+def test_a_category_that_failed_in_the_latest_run_stays_listed():
+    def item(pid, category, last):
+        return (pid, "ee", f"p{pid}", f"https://ee.ge/p{pid}", category, ago(10), last)
+
+    # tvs was crawled in the latest run; phones failed in it, so its products
+    # were last seen in the run before.
+    products = [item(1, "tvs", RUN), item(2, "tvs", RUN - timedelta(days=3)), item(3, "smartphones", RUN - timedelta(hours=12))]
+    changes = [(pid, ago(10), D("100"), None) for pid in (1, 2, 3)]
+    data = build(products, changes, NOW)
+    assert {row[0] for row in data["catalog"]} == {1, 3}  # 2 really left its category

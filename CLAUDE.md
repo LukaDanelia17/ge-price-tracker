@@ -51,6 +51,12 @@ Status (2026-11-09): GitHub-hosted runners get 403 from both stores, so the
 crawl runs from launchd on the Mac (`scripts/install_schedule.sh`, logs in
 `logs/`). The repo lives in `~/ge-price-tracker`: launchd jobs can't read
 `~/Documents` (macOS privacy protection).
+The Mac is a laptop that sleeps (2026-11-11: a run crawled only during
+few-second "dark wakes" for 13 h and lost two ee categories). So: the agent
+also checks hourly/at login (`crawl.sh --if-due`); a run with a failed category
+doesn't count and is retried no more than every 2 h; crawl.sh skips when
+there's no network and runs under `caffeinate`. Runs still need the Mac awake
+(lid open or on power) — no setting can make a sleeping laptop crawl.
 
 ## Judging a discount (dashboard.py, and the report)
 Same yardstick as the EU Omnibus rule: compare the sale price with the lowest

@@ -22,17 +22,24 @@ set -a
 . ./.env
 set +a
 
-# launchd fires this on wake/boot, which can happen before Wi-Fi/DNS is up. The
-# run would then die on the first DB connect and the Telegram alert couldn't
-# send either. Wait up to ~5 min for outbound DNS+HTTPS before starting.
-for _ in $(seq 1 20); do
-    curl -sf -m 5 https://api.telegram.org/ >/dev/null 2>&1 && break
-    echo "$(date '+%F %T') waiting for network…" >> logs/crawl.log
+# launchd also fires during the Mac's few-second "dark wakes" from sleep, when
+# there's no network and it sleeps again right away. Wait up to 5 minutes of
+# real time (sleep stretches count) for DNS+HTTPS; if it isn't there, skip —
+# the hourly --if-due check tries again once the Mac is properly awake.
+start=$(date +%s)
+until curl -sf -m 5 https://api.telegram.org/ >/dev/null 2>&1; do
+    if (( $(date +%s) - start > 300 )); then
+        echo "$(date '+%F %T') skipped: no network" >> logs/crawl.log
+        exit 0
+    fi
     sleep 15
 done
 
+date -u +%Y-%m-%dT%H:%M:%S+00:00 > logs/last_attempt
 log="logs/crawl-$(date +%Y%m%d-%H%M).log"
-.venv/bin/python -m gept.run > "$log" 2>&1
+# Hold off idle sleep while crawling (ee alone takes ~15 minutes); this only
+# lasts as long as the crawl and doesn't change any system setting.
+/usr/bin/caffeinate -is .venv/bin/python -m gept.run > "$log" 2>&1
 status=$?
 echo "$(date '+%F %T') exit=$status log=$log" >> logs/crawl.log
 

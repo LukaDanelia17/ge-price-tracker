@@ -1,17 +1,23 @@
 """Is a crawl due? Exit 0 if yes, 1 if not.
 
 launchd checks hourly (and at login) via `scripts/crawl.sh --if-due`, so a
-scheduled run the Mac missed — off, asleep or offline — is caught up as soon as
-it can be, without adding runs between the scheduled ones.
+scheduled run the Mac missed — off, asleep or offline — or one that ended with a
+failed category is caught up as soon as it can be, without adding runs between
+the scheduled ones.
 """
 
 import sys
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from .config import LAST_SUCCESS_FILE, SLOTS
+from .config import LAST_ATTEMPT_FILE, LAST_SUCCESS_FILE, SLOTS
 
 TZ = ZoneInfo("Asia/Tbilisi")
+
+# After a run for a slot started but didn't finish cleanly, wait this long
+# before retrying, so a category that's broken for good can't loop every hour.
+RETRY_EVERY = timedelta(hours=2)
 
 
 def last_slot(now: datetime) -> datetime:
@@ -24,16 +30,25 @@ def last_slot(now: datetime) -> datetime:
     return (local - timedelta(days=1)).replace(hour=max(SLOTS), minute=0, second=0, microsecond=0)
 
 
-def is_due(last_success: datetime | None, now: datetime) -> bool:
-    return last_success is None or last_success < last_slot(now)
+def is_due(last_success: datetime | None, now: datetime, last_attempt: datetime | None = None) -> bool:
+    slot = last_slot(now)
+    if last_success is not None and last_success >= slot:
+        return False
+    if last_attempt is not None and last_attempt >= slot and now - last_attempt < RETRY_EVERY:
+        return False
+    return True
+
+
+def read_time(path: Path) -> datetime | None:
+    try:
+        return datetime.fromisoformat(path.read_text().strip())
+    except (FileNotFoundError, ValueError):
+        return None
 
 
 def main() -> int:
-    try:
-        last = datetime.fromisoformat(LAST_SUCCESS_FILE.read_text().strip())
-    except (FileNotFoundError, ValueError):
-        last = None
-    return 0 if is_due(last, datetime.now(timezone.utc)) else 1
+    due = is_due(read_time(LAST_SUCCESS_FILE), datetime.now(timezone.utc), read_time(LAST_ATTEMPT_FILE))
+    return 0 if due else 1
 
 
 if __name__ == "__main__":

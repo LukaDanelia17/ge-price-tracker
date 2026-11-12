@@ -153,10 +153,18 @@ def build(products: list[tuple], changes: list[tuple], now: datetime, runs: list
         for s, t in sorted(last_run.items())
     }
     catalog = []
-    for pid, store, _name, _url, _category, _first_seen, last_seen in products:
+    # Listed = seen in the latest run that covered the product's category. Per
+    # category, so a category that failed in the latest run doesn't make all of
+    # its products look delisted.
+    category_run = {}
+    for _, store, _name, _url, category, _first_seen, last_seen in products:
+        key = (store, category)
+        category_run[key] = max(category_run.get(key, last_seen), last_seen)
+
+    for pid, store, _name, _url, category, _first_seen, last_seen in products:
         rows = series.get(pid)
-        if not rows or last_seen < last_run[store]:
-            continue  # not listed in the store's latest run
+        if not rows or last_seen < category_run[(store, category)]:
+            continue  # gone from its category in the latest run that covered it
         st = stores[store]
         st["products"] += 1
         a = assess(rows, now)

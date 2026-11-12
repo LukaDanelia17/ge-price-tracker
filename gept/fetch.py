@@ -29,8 +29,9 @@ class Throttle:
 
 
 # Seconds to wait before each retry of a failed request (connection errors,
-# timeouts, 5xx). 4xx is not retried.
-RETRY_WAITS = (10, 30)
+# timeouts, 5xx). 4xx is not retried. A Mac waking from sleep can take a couple
+# of minutes to get its network back, hence the longer tail.
+RETRY_WAITS = (10, 30, 60, 120)
 
 # A whole response must arrive within this many seconds. httpx's timeouts are
 # per read, so a server that trickles bytes never trips them; on 2026-11-02
