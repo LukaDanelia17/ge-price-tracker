@@ -231,7 +231,7 @@ TEMPLATE = r"""<!doctype html>
   color-scheme: light;
   --surface-0: #f4f4f2; --surface-1: #fcfcfb; --border: #e3e2de;
   --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #77766f;
-  --grid: #ebeae6; --series-1: #2a78d6; --series-2: #eb6834; --ref: #8a8984;
+  --grid: #ebeae6; --series-1: #2a78d6; --series-2: #eb6834; --ref: #8a8984; --gap: #efeeea;
   --up: #b3261e; --down: #146c2e;
   --bad-bg: #fdecea; --bad: #a8201a; --warn-bg: #fff3dc; --warn: #8a5300;
   --good-bg: #e6f4ea; --good: #146c2e; --early-bg: #efeeea; --early: #52514e; --sel: #eaf2fd;
@@ -241,7 +241,7 @@ TEMPLATE = r"""<!doctype html>
     color-scheme: dark;
     --surface-0: #121211; --surface-1: #1a1a19; --border: #2e2e2c;
     --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #94938b;
-    --grid: #2a2a28; --series-1: #3987e5; --series-2: #d95926; --ref: #8f8e86;
+    --grid: #2a2a28; --series-1: #3987e5; --series-2: #d95926; --ref: #8f8e86; --gap: #242422;
     --up: #f2867f; --down: #7bd88f;
     --bad-bg: #3b1a17; --bad: #f2867f; --warn-bg: #3a2c12; --warn: #f0b860;
     --good-bg: #15301e; --good: #7bd88f; --early-bg: #2a2a28; --early: #c3c2b7; --sel: #1c2836;
@@ -251,7 +251,7 @@ TEMPLATE = r"""<!doctype html>
   color-scheme: dark;
   --surface-0: #121211; --surface-1: #1a1a19; --border: #2e2e2c;
   --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #94938b;
-  --grid: #2a2a28; --series-1: #3987e5; --series-2: #d95926; --ref: #8f8e86;
+  --grid: #2a2a28; --series-1: #3987e5; --series-2: #d95926; --ref: #8f8e86; --gap: #242422;
   --up: #f2867f; --down: #7bd88f;
   --bad-bg: #3b1a17; --bad: #f2867f; --warn-bg: #3a2c12; --warn: #f0b860;
   --good-bg: #15301e; --good: #7bd88f; --early-bg: #2a2a28; --early: #c3c2b7; --sel: #1c2836;
@@ -292,6 +292,7 @@ a.btn { color: var(--series-1); }
 .badge.v-none { color: var(--text-muted); font-weight: 400; }
 .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; color: var(--text-secondary); margin: 0 0 8px; }
 .swatch { display: inline-block; width: 18px; height: 0; border-top: 2px solid; vertical-align: middle; margin-right: 6px; }
+.swatch.box { height: 12px; border: 0; background: var(--gap); outline: 1px solid var(--border); }
 .chart-box { position: relative; height: 280px; }
 
 .views { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
@@ -377,9 +378,9 @@ a.ext { text-decoration: none; margin-left: 6px; }
       <span><span class="swatch" style="border-color: var(--series-1)"></span>ფასი, რომლითაც იყიდებოდა</span>
       <span><span class="swatch" style="border-top-style: dashed; border-color: var(--series-2)"></span>„ძველი“ ფასი, რომელსაც მაღაზია წერს</span>
       <span id="lg-ref"><span class="swatch" style="border-top-style: dotted; border-color: var(--ref)"></span>ფასდაკლებამდე ყველაზე იაფი (30 დღე)</span>
+      <span id="lg-gap"><span class="swatch box"></span>ამ დროს ფასებს არ ვამოწმებდით</span>
     </div>
     <div class="chart-box"><canvas id="chart" role="img" aria-label="ფასის ისტორიის გრაფიკი"></canvas></div>
-    <p class="meta" id="f-gap"></p>
   </section>
 
   <h2>რა ვიპოვეთ</h2>
@@ -698,6 +699,20 @@ function explain(c) {
 }
 
 let chart, xSpan = 0;
+// Gray bands behind the lines for the stretches we weren't collecting.
+const gapBands = {
+  id: "gapBands",
+  beforeDatasetsDraw(ch) {
+    const {ctx, chartArea: {top, bottom, left, right}, scales: {x}} = ch;
+    ctx.save();
+    ctx.fillStyle = css("--gap");
+    for (const [a, b] of ch.$gaps || []) {
+      const x0 = Math.max(left, x.getPixelForValue(a)), x1 = Math.min(right, x.getPixelForValue(b));
+      if (x1 > x0) ctx.fillRect(x0, top, x1 - x0, bottom - top);
+    }
+    ctx.restore();
+  },
+};
 const DAY_MS = 86400000;
 // Short histories (a day or two) collapse day-only ticks into "10 Nov" repeated
 // several times; show the time too until the span is wide enough for plain dates.
@@ -733,44 +748,38 @@ function show(id, scroll) {
   if (end - lo < DAY_MS) { const mid = (lo + end) / 2; xMin = mid - DAY_MS / 2; xMax = mid + DAY_MS / 2; }
   else { const pad = (end - lo) * 0.03; xMin -= pad; xMax += pad; }
   xSpan = xMax - xMin;
-  // Draw each value as a step that holds until the next change. Stretches where
-  // we weren't collecting (gaps) are split out and drawn faint and dotted, so the
-  // chart never pretends we saw the price then. Every dataset gets the same x
-  // positions, so tooltips line up.
-  const gaps = (D.gaps[c.store] || []).filter(([a, b]) => b > lo && a < end);
-  $("f-gap").textContent = gaps.length ? "მკრთალი ხაზი — ამ დროს ფასებს არ ვაგროვებდით: " + gapText(gaps) : "";
+  // Draw each value as a step that holds until the next change, as a solid line.
+  // Stretches where we weren't collecting (gaps) get a gray background band
+  // instead, so the chart says "we didn't look here" without breaking the line
+  // into faint dotted pieces. Every dataset gets the same x positions, so
+  // tooltips line up.
+  const gaps = (D.gaps[c.store] || []).filter(([a, b]) => b > xMin && a < xMax);
+  $("lg-gap").hidden = !gaps.length;
   const steps = i => rows.flatMap((r, k) => {
     const t1 = Math.max(k + 1 < rows.length ? rows[k + 1][0] : end, r[0]);
-    const out = [{x: r[0], y: r[i]}];
-    for (const [a, b] of gaps)
-      if (a >= r[0] && b <= t1) out.push({x: a, y: r[i], hold: true}, {x: b, y: r[i], hold: true});
-    out.push({x: t1, y: r[i], hold: true});
-    return out;
+    return [{x: r[0], y: r[i]}, {x: t1, y: r[i], hold: true}];
   });
-  const inGap = s => gaps.some(([a, b]) => s.p0.parsed.x >= a && s.p1.parsed.x <= b);
-  const faint = (color, dash) => ({borderColor: s => inGap(s) ? color + "66" : color,
-                                   borderDash: s => inGap(s) ? [2, 4] : dash});
-  const dot = ctx => ctx.raw && ctx.raw.hold ? 0 : 4;
+  const dot = ctx => ctx.raw && ctx.raw.hold ? 0 : 3;
   const datasets = [
     {label: "ფასი", data: steps(1), borderColor: css("--series-1"), backgroundColor: css("--series-1"),
-     borderWidth: 2, pointRadius: dot, pointHoverRadius: dot, spanGaps: false,
-     segment: faint(css("--series-1"), undefined)},
+     borderWidth: 2, pointRadius: dot, pointHoverRadius: dot, spanGaps: false, order: 1},
     {label: "„ძველი“ ფასი", data: steps(2), borderColor: css("--series-2"), backgroundColor: css("--series-2"),
-     borderWidth: 2, borderDash: [6, 4], pointRadius: dot, pointHoverRadius: dot, spanGaps: false,
-     segment: faint(css("--series-2"), [6, 4])},
+     borderWidth: 2, borderDash: [6, 4], pointRadius: dot, pointHoverRadius: dot, spanGaps: false, order: 2},
   ];
+  // Drawn on top (lowest order): it often sits exactly on the price line.
   if (c.ref != null)
     datasets.push({label: "ფასდაკლებამდე ყველაზე იაფი", data: steps(1).map(p => ({...p, y: c.ref})),
-                   borderColor: css("--ref"), backgroundColor: css("--ref"), borderWidth: 1.5,
-                   borderDash: [2, 4], pointRadius: 0, pointHoverRadius: 0});
+                   borderColor: css("--ref"), backgroundColor: css("--ref"), borderWidth: 2,
+                   borderDash: [2, 3], pointRadius: 0, pointHoverRadius: 0, order: 0});
   if (chart) {
+    chart.$gaps = gaps;
     chart.data = {datasets};
     chart.options.scales.x.min = xMin;
     chart.options.scales.x.max = xMax;
     chart.update();
   } else {
     chart = new Chart($("chart"), {
-      type: "line", data: {datasets},
+      type: "line", data: {datasets}, plugins: [gapBands],
       options: {
         responsive: true, maintainAspectRatio: false, animation: false,
         interaction: {mode: "index", intersect: false},
@@ -786,6 +795,8 @@ function show(id, scroll) {
         },
       },
     });
+    chart.$gaps = gaps;
+    chart.update();
   }
   if (scroll) $("focus").scrollIntoView({behavior: "smooth", block: "start"});
 }
