@@ -35,6 +35,10 @@ Black Friday (27 Nov 2026), publish a "fake discount" report, measure reaction.
   runs stay light). Attribute gamige as the source in any report.
 - buyable (all stores): `not disableBuyButton and not onSaleSoon and price > 0`.
 - Keep raw hasDiscount / discountAmount / discountPercent in price_changes.
+- products.image_url: the listing's photo (zoommer/ee `imageUrl`, kontakt card
+  `img`; alta_gamige: gamige's detail `image`, fetched with the alta link, once
+  per product — hosted by gamige or another store). Dashboard only; never a
+  reason for a price_changes row, and a missing photo never erases a stored one.
 - A configured category that returns 0 items fails the run; fix the config,
   don't delete the entry.
 - ee.ge robots.txt sets Crawl-delay 5 → 5 s between ee requests.
@@ -67,6 +71,9 @@ the store's crossed-out price.
   was raised mid-sale while the price stayed.
 - exaggerated: cheaper, but 10+ percentage points less than claimed.
 - real / unconfirmed (on sale since we first saw it) / none.
+- "perpetual" (dashboard flag on unconfirmed): on sale 14+ days with the same
+  price and crossed-out price at every check — say "at least N days", since we
+  can't see before our first check.
 
 ## Quality checks (each run)
 - Item count per store/category vs previous run (alert on 0 or >50% drop)

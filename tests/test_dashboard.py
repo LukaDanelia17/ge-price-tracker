@@ -119,3 +119,42 @@ def test_a_category_that_failed_in_the_latest_run_stays_listed():
     changes = [(pid, ago(10), D("100"), None) for pid in (1, 2, 3)]
     data = build(products, changes, NOW)
     assert {row[0] for row in data["catalog"]} == {1, 3}  # 2 really left its category
+
+
+def test_photos_are_passed_only_for_listed_products():
+    products = [product(1), product(2, last=RUN - timedelta(days=3))]
+    changes = [(1, ago(10), D("100"), None), (2, ago(10), D("50"), None)]
+    data = build(products, changes, NOW, images={1: "https://s3.zoommer.ge/a.jpg", 2: "https://x/b.jpg"})
+    assert data["images"] == {1: "https://s3.zoommer.ge/a.jpg"}
+    assert build(products, changes, NOW)["images"] == {}
+
+
+def test_a_sale_that_never_moves_is_steady():
+    # on "sale" since we first saw it, same price and crossed-out price throughout
+    a = assess(history((20, "299.99", "399.99")), NOW)
+    assert (a.verdict, a.steady, a.since) == ("unconfirmed", True, ago(20))
+    # a stock change adds a row without moving the prices: still steady
+    a = assess(history((20, "299.99", "399.99"), (5, "299.99", "399.99")), NOW)
+    assert a.steady
+    # the price moved during the sale: not steady
+    assert not assess(history((20, "299.99", "399.99"), (5, "279.99", "399.99")), NOW).steady
+    assert not assess(history((10, "500", None)), NOW).steady  # not on sale at all
+
+
+def test_report_counts_stores_and_picks_the_clearest_examples():
+    from dashboard import report_data
+
+    products = [product(i) for i in range(1, 6)]
+    changes = [
+        (1, ago(10), D("500"), None), (1, ago(1), D("500"), D("900")),     # fake, claims 44%
+        (2, ago(10), D("500"), None), (2, ago(1), D("500"), D("700")),     # fake, claims 29%
+        (3, ago(10), D("700"), None), (3, ago(1), D("500"), D("700")),     # real
+        (4, ago(20), D("100"), D("200")),                                   # on sale, unchanged ~20 days
+        (5, ago(10), D("50"), None),                                        # no sale
+    ]
+    r = report_data(build(products, changes, NOW, images={3: "https://x/3.jpg"}))
+    [ee] = r["stores"]
+    assert (ee["products"], ee["on_sale"], ee["fake"], ee["real"], ee["perm"], ee["none"]) == (5, 4, 2, 1, 1, 1)
+    assert [i["id"] for i in r["fake"]] == [1, 2]
+    assert [i["id"] for i in r["real"]] == [3] and r["real"][0]["img"] == "https://x/3.jpg"
+    assert [(i["id"], i["days"]) for i in r["perm"]] == [(4, 19)]  # 20 days ago to the run an hour ago
