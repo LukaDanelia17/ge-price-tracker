@@ -123,37 +123,40 @@ def ee(client: httpx.Client, throttle: Throttle, slug: str) -> Iterator[dict]:
 GAMIGE_PAGE_SIZE = 20
 
 
-def _alta_url(client: httpx.Client, throttle: Throttle, product_id: str) -> str | None:
-    """alta.ge's own product link from gamige's per-product detail endpoint.
+def _alta_detail(client: httpx.Client, throttle: Throttle, product_id: str) -> tuple[str | None, str | None]:
+    """(alta.ge's own product link, product photo) from gamige's per-product
+    detail endpoint.
 
-    The search list has no per-store URL; only /api/product/{id} carries
-    stores[].url. One extra call, so we only make it for products whose link
-    we don't already have (see gamige_alta's known_urls).
+    The search list has neither; only /api/product/{id} carries stores[].url
+    and gamige's "image" (hosted by gamige or by another store). One extra
+    call, so we only make it for products we're still missing one of (see
+    gamige_alta's `known`).
     """
     throttle.wait()
     try:
-        r = get_with_retry(client, f"https://gamige.com/api/product/{product_id}")
-        for s in r.json().get("stores") or []:
-            if (s.get("store") or "").lower() == "alta":
-                return s.get("url")
-    except httpx.HTTPError:
+        d = get_with_retry(client, f"https://gamige.com/api/product/{product_id}").json()
+    except (httpx.HTTPError, ValueError):
         log.warning("gamige: detail fetch failed for %s", product_id)
-    return None
+        return None, None
+    link = next((s.get("url") for s in d.get("stores") or [] if (s.get("store") or "").lower() == "alta"), None)
+    return link, d.get("image") or None
 
 
 def gamige_alta(
-    client: httpx.Client, throttle: Throttle, category: str, known_urls: dict[str, str] | None = None
+    client: httpx.Client, throttle: Throttle, category: str,
+    known: dict[str, tuple[str | None, str | None]] | None = None,
 ) -> Iterator[dict]:
     """alta.ge prices via gamige.com's open comparison API (no auth, no challenge).
 
     alta.ge blocks automated access behind Cloudflare, so we don't fetch it
     directly; gamige is an open third-party aggregator that publishes alta's
     prices. `category` is gamige's own Georgian category name. Each result is
-    enriched with "altaUrl" (alta's own link): reused from known_urls when we
-    already have it, otherwise fetched once from the detail endpoint. Yields the
-    same {products, productsCount} envelope the other fetchers do.
+    enriched with "altaUrl" (alta's own link) and "image": reused from `known`
+    ({id: (link, photo)} from the DB) when we have both, otherwise fetched once
+    from the detail endpoint. Yields the same {products, productsCount}
+    envelope the other fetchers do.
     """
-    known_urls = known_urls or {}
+    known = known or {}
 
     def fetch_page(page: int) -> dict:
         throttle.wait()
@@ -166,7 +169,11 @@ def gamige_alta(
         results = data.get("results") or []
         for item in results:
             pid = str(item["id"])
-            item["altaUrl"] = known_urls.get(pid) or _alta_url(client, throttle, pid)
+            link, image = known.get(pid, (None, None))
+            if not (link and image):
+                found_link, found_image = _alta_detail(client, throttle, pid)
+                link, image = link or found_link, image or found_image
+            item["altaUrl"], item["image"] = link, image
         return {"products": results, "productsCount": data.get("total") or 0}
 
     return paginate(fetch_page, GAMIGE_PAGE_SIZE)

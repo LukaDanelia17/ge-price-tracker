@@ -10,6 +10,10 @@ create table if not exists products (
     unique (store, store_product_id)
 );
 
+-- Product photo URL on the store's server (dashboard only; null when the
+-- listing has none, e.g. alta via gamige).
+alter table products add column if not exists image_url text;
+
 -- One row per product whenever price, old_price, in_stock or buyable changes
 -- (the first observation counts as a change). The discount columns record
 -- what the store reported at that moment; on their own they don't add a row.

@@ -37,12 +37,13 @@ def save(conn: psycopg.Connection, store: str, items: list[Item], observed_at: d
     with conn.transaction(), conn.cursor() as cur:
         cur.execute(
             """
-            insert into products (store, store_product_id, name, url, category, first_seen, last_seen)
-            select %(store)s, t.pid, t.name, t.url, t.category, %(ts)s, %(ts)s
-            from unnest(%(pids)s::text[], %(names)s::text[], %(urls)s::text[], %(cats)s::text[])
-                 as t(pid, name, url, category)
+            insert into products (store, store_product_id, name, url, category, first_seen, last_seen, image_url)
+            select %(store)s, t.pid, t.name, t.url, t.category, %(ts)s, %(ts)s, t.image_url
+            from unnest(%(pids)s::text[], %(names)s::text[], %(urls)s::text[], %(cats)s::text[], %(images)s::text[])
+                 as t(pid, name, url, category, image_url)
             on conflict (store, store_product_id) do update
-                set name = excluded.name, url = excluded.url, last_seen = excluded.last_seen
+                set name = excluded.name, url = excluded.url, last_seen = excluded.last_seen,
+                    image_url = coalesce(excluded.image_url, products.image_url)
             returning store_product_id, id
             """,
             {
@@ -52,6 +53,7 @@ def save(conn: psycopg.Connection, store: str, items: list[Item], observed_at: d
                 "names": [i.name for i in items],
                 "urls": [i.url for i in items],
                 "cats": [i.category for i in items],
+                "images": [i.image_url for i in items],
             },
         )
         ids = dict(cur.fetchall())
