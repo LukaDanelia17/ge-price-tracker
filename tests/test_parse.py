@@ -183,3 +183,28 @@ def test_kontakt_money():
     assert kontakt_money("1539,99\xa0₾") == Decimal("1539.99")
     assert kontakt_money("1.539,99 ₾") == Decimal("1539.99")
     assert kontakt_money("------ ₾") is None and kontakt_money(None) is None
+
+
+def test_photos_come_from_the_listing(zoommer_items, ee_listing_p21):
+    assert all(i.image_url and i.image_url.startswith("https://s3.zoommer.ge/") for i in zoommer_items)
+    ee = parse_products("ee", "smartphones", ee_listing_p21["products"])
+    assert ee and all(i.image_url.startswith("https://static.ee.ge/") for i in ee)
+    assert parse_products("ee", "smartphones", [{"id": 1, "name": "x", "route": "x", "price": 1}])[0].image_url is None
+
+
+def test_kontakt_photo_is_the_card_image():
+    card = ('<div class="prodItem product-item"><a class="prodItem__img" href="https://kontakt.ge/tv">'
+            '<picture><img src="https://kontakt.ge/media/tv.jpg" alt="tv"></picture></a>'
+            '<a data-product-id="7"></a><div class="prodItem__title">TV</div>'
+            '<div class="prodItem__prices"><strong><b>100,00 ₾</b></strong></div></div>')
+    no_img = card.replace('<picture><img src="https://kontakt.ge/media/tv.jpg" alt="tv"></picture>', "")
+    [with_photo] = parse_kontakt("kontakt", "tvs", kontakt_listing(card)["products"])
+    [without] = parse_kontakt("kontakt", "tvs", kontakt_listing(no_img)["products"])
+    assert (with_photo.image_url, without.image_url) == ("https://kontakt.ge/media/tv.jpg", None)
+
+
+def test_a_photo_alone_is_not_a_price_change():
+    from gept.db import changed_items
+
+    [item] = parse_products("ee", "tvs", [{"id": 1, "name": "x", "route": "x", "price": 1, "imageUrl": "https://a/b.jpg"}])
+    assert changed_items({"1": item.state()}, [item]) == []

@@ -27,12 +27,13 @@ def collect(
     store: str,
     dump: Path | None = None,
     counts: dict[str, int] | None = None,
-    known_urls: dict[str, str] | None = None,
+    known: dict[str, tuple] | None = None,
 ) -> tuple[dict[str, Item], list[str]]:
     """Fetch every configured category of one store. Returns items keyed by
     store_product_id and a list of failed categories; fills `counts` with
-    items per finished category ("store/category/ref"). `known_urls` (alta only)
-    lets the gamige fetcher skip the per-product link lookup we already have."""
+    items per finished category ("store/category/ref"). `known` (alta only:
+    {id: (alta link, photo)} from the DB) lets the gamige fetcher skip the
+    per-product detail lookup once we have both."""
     items: dict[str, Item] = {}
     failures: list[str] = []
     throttle = fetch.new_throttle(store)
@@ -42,7 +43,7 @@ def collect(
     with ExitStack() as stack:
         client = stack.enter_context(fetch.http_client())
         if store == "alta_gamige":
-            pages_for = lambda ref: fetcher(client, throttle, ref, known_urls or {})  # noqa: E731
+            pages_for = lambda ref: fetcher(client, throttle, ref, known or {})  # noqa: E731
         else:
             pages_for = lambda ref: fetcher(client, throttle, ref)  # noqa: E731
 
@@ -129,16 +130,17 @@ def main(argv: list[str] | None = None) -> int:
     observed_at = datetime.now(timezone.utc)
 
     def crawl(store: str) -> tuple:
-        known_urls = None
+        known = None
         if store == "alta_gamige" and url is not None:
             with db.connect(url) as conn:
                 rows = conn.execute(
-                    "select store_product_id, url from products where store = %s", (store,)
+                    "select store_product_id, url, image_url from products where store = %s", (store,)
                 ).fetchall()
-            known_urls = {pid: u for pid, u in rows if u.startswith("https://alta.ge/")}
-            log.info("alta_gamige: %d known alta links; resolving links for the rest", len(known_urls))
+            known = {pid: (u if u.startswith("https://alta.ge/") else None, img) for pid, u, img in rows}
+            log.info("alta_gamige: %d products with both alta link and photo; looking up the rest",
+                     sum(bool(a and b) for a, b in known.values()))
         store_counts: dict[str, int] = {}
-        items, failures = collect(store, args.dump, store_counts, known_urls)
+        items, failures = collect(store, args.dump, store_counts, known)
         values = items.values()
         log.info(
             "%s: %d unique items, in_stock true/false/unknown %d/%d/%d, %d buyable, %d with old_price",

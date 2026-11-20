@@ -35,6 +35,9 @@ class Item:
     has_discount: bool | None
     discount_amount: Decimal | None
     discount_percent: Decimal | None
+    # Product photo on the store's own server, for the dashboard. Not part of
+    # state(): a new photo isn't a price change.
+    image_url: str | None = None
 
     def state(self) -> tuple:
         """The fields whose change is worth a price_changes row."""
@@ -76,6 +79,7 @@ def parse_products(store: str, category: str, products: list[dict]) -> list[Item
             has_discount=p.get("hasDiscount"),
             discount_amount=money(p.get("discountAmount")),
             discount_percent=money(p.get("discountPercent")),
+            image_url=p.get("imageUrl") or None,
         )
         for p in products
     ]
@@ -113,6 +117,7 @@ def parse_gamige(store: str, category: str, products: list[dict]) -> list[Item]:
                 has_discount=None,
                 discount_amount=None,
                 discount_percent=None,
+                image_url=p.get("image") or None,
             )
         )
     return items
@@ -157,6 +162,7 @@ def kontakt_listing(html: str) -> dict:
         prices = card.css_first(".prodItem__prices strong")
         current = prices.css_first("b") if prices else None
         crossed = prices.css_first("i") if prices else None
+        img = link.css_first("img")
         products.append({
             "id": pid.attributes["data-product-id"],
             "name": title.text(strip=True),
@@ -164,6 +170,7 @@ def kontakt_listing(html: str) -> dict:
             "price": current.text(strip=True) if current else None,
             "old": crossed.text(strip=True) if crossed else None,
             "in_stock": in_stock,
+            "image": img.attributes.get("src") if img else None,
         })
     nxt = tree.css_first(".pages-item-next a")
     return {"products": products, "next_url": nxt.attributes.get("href") if nxt else None}
@@ -189,6 +196,7 @@ def parse_kontakt(store: str, category: str, products: list[dict]) -> list[Item]
                 has_discount=None,
                 discount_amount=None,
                 discount_percent=None,
+                image_url=p.get("image") or None,
             )
         )
     return items

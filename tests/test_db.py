@@ -239,10 +239,38 @@ def test_stores_are_crawled_at_the_same_time(monkeypatch):
     # run one after the other, the first would time out waiting for the second.
     barrier = threading.Barrier(2, timeout=5)
 
-    def fake_collect(store, dump=None, counts=None, known_urls=None):
+    def fake_collect(store, dump=None, counts=None, known=None):
         barrier.wait()
         counts[f"{store}/tvs/x"] = 1
         return {"1": item()}, []
 
     monkeypatch.setattr(run, "collect", fake_collect)
     assert run.main(["--dry-run", "--store", "zoommer", "--store", "ee"]) == 0
+
+
+def test_gamige_looks_up_link_and_photo_once():
+    import httpx
+
+    from gept.fetch import Throttle, gamige_alta
+    from gept.parse import parse_gamige
+
+    details = []
+
+    def handler(request):
+        if request.url.path == "/api/search":
+            results = [{"id": i, "name": f"p{i}", "prices": {"Alta": 10}, "oldPrices": {}} for i in (1, 2, 3)]
+            return httpx.Response(200, json={"results": results, "total": 3})
+        pid = request.url.path.rsplit("/", 1)[1]
+        details.append(pid)
+        return httpx.Response(200, json={"image": f"https://gamige.com/img/{pid}.jpg",
+                                         "stores": [{"store": "Alta", "url": f"https://alta.ge/p{pid}"}]})
+
+    known = {"1": ("https://alta.ge/p1", "https://x/1.jpg"),  # complete: no lookup
+             "2": ("https://alta.ge/p2", None)}               # photo missing: looked up once
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    [page] = list(gamige_alta(client, Throttle(0), "ტელევიზორები", known))
+    items = {i.store_product_id: i for i in parse_gamige("alta_gamige", "tvs", page["products"])}
+    assert details == ["2", "3"]
+    assert (items["1"].url, items["1"].image_url) == ("https://alta.ge/p1", "https://x/1.jpg")
+    assert (items["2"].url, items["2"].image_url) == ("https://alta.ge/p2", "https://gamige.com/img/2.jpg")
+    assert (items["3"].url, items["3"].image_url) == ("https://alta.ge/p3", "https://gamige.com/img/3.jpg")
